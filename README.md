@@ -1,6 +1,6 @@
 # ApertureElectron
 
-`ApertureElectron` is a desktop debug workbench for ContextUI, rebuilt with Electron + React + TypeScript.
+`ApertureElectron` is a desktop debug workbench for ACI, rebuilt with Electron + React + TypeScript.
 
 ## Features
 

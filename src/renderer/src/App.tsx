@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { contextUiApi } from "./api";
+import { ACIApi } from "./api";
 import type {
   ActionParameterDef,
   AppInfo,
@@ -356,12 +356,15 @@ export function App(): JSX.Element {
   }
 
   function isAssistantTimelineType(type: string): boolean {
-    const normalized = type.trim().toLowerCase().replace(/[\s_-]/g, "");
+    const normalized = type
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]/g, "");
     return normalized.startsWith("assistant");
   }
 
   async function initAssistantTracking(sessionId: string): Promise<void> {
-    const timeline = await contextUiApi.getContextTimeline(baseUrl, sessionId, true);
+    const timeline = await ACIApi.getContextTimeline(baseUrl, sessionId, true);
     const seen = new Set<number>();
 
     for (const item of timeline) {
@@ -373,7 +376,7 @@ export function App(): JSX.Element {
   }
 
   async function pullAssistantDeltas(sessionId: string): Promise<number> {
-    const timeline = await contextUiApi.getContextTimeline(baseUrl, sessionId, true);
+    const timeline = await ACIApi.getContextTimeline(baseUrl, sessionId, true);
     const items = timeline
       .filter((item) => isAssistantTimelineType(item.type) && !seenAssistantSeqRef.current.has(item.seq))
       .sort((left, right) => left.seq - right.seq);
@@ -392,10 +395,10 @@ export function App(): JSX.Element {
 
   async function loadSessionState(sessionId: string, includeObsoleteValue = includeObsolete): Promise<void> {
     const [nextWindows, nextApps, nextRawContext, nextRawLlmInput] = await Promise.all([
-      contextUiApi.getWindows(baseUrl, sessionId),
-      contextUiApi.getApps(baseUrl, sessionId),
-      contextUiApi.getRawContext(baseUrl, sessionId, includeObsoleteValue),
-      contextUiApi.getRawLlmInput(baseUrl, sessionId),
+      ACIApi.getWindows(baseUrl, sessionId),
+      ACIApi.getApps(baseUrl, sessionId),
+      ACIApi.getRawContext(baseUrl, sessionId, includeObsoleteValue),
+      ACIApi.getRawLlmInput(baseUrl, sessionId),
     ]);
 
     setWindows(nextWindows);
@@ -410,7 +413,7 @@ export function App(): JSX.Element {
       return selectedSessionId;
     }
 
-    const created = await contextUiApi.createSession(baseUrl);
+    const created = await ACIApi.createSession(baseUrl);
     setSelectedSessionId(created.sessionId);
     setEntries((prev) => [...prev, nowEntry("system", `Auto-created session ${created.sessionId}`)]);
 
@@ -419,11 +422,11 @@ export function App(): JSX.Element {
   }
 
   async function reloadSessionCatalog(autoCreateIfEmpty = false): Promise<void> {
-    let nextSessions = await contextUiApi.getSessions(baseUrl);
+    let nextSessions = await ACIApi.getSessions(baseUrl);
     let nextSelected = selectedSessionId;
 
     if (nextSessions.length === 0 && autoCreateIfEmpty) {
-      const created = await contextUiApi.createSession(baseUrl);
+      const created = await ACIApi.createSession(baseUrl);
       nextSessions = [created];
       nextSelected = created.sessionId;
       setEntries((prev) => [...prev, nowEntry("system", `Auto-created session ${created.sessionId}`)]);
@@ -448,7 +451,7 @@ export function App(): JSX.Element {
 
   async function createSession(): Promise<void> {
     await runGuarded(async () => {
-      const created = await contextUiApi.createSession(baseUrl);
+      const created = await ACIApi.createSession(baseUrl);
       setEntries((prev) => [...prev, nowEntry("system", `Created session ${created.sessionId}`)]);
       setSelectedSessionId(created.sessionId);
       await reloadSessionCatalog();
@@ -461,7 +464,7 @@ export function App(): JSX.Element {
     if (!sessionId) return;
 
     await runGuarded(async () => {
-      await contextUiApi.closeSession(baseUrl, sessionId);
+      await ACIApi.closeSession(baseUrl, sessionId);
       setEntries((prev) => [...prev, nowEntry("system", `Closed session ${sessionId}`)]);
       setSelectedSessionId(null);
       await reloadSessionCatalog();
@@ -490,7 +493,7 @@ export function App(): JSX.Element {
         }
 
         setEntries((prev) => [...prev, nowEntry("simulator", content)]);
-        const result = await contextUiApi.simulateAssistantOutput(baseUrl, sessionId, content);
+        const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, content);
         applyInteractionResult(result);
         await loadSessionState(sessionId);
       });
@@ -533,7 +536,7 @@ export function App(): JSX.Element {
         });
       }, 700);
 
-      const result = await contextUiApi.interact(baseUrl, activeSessionId, content);
+      const result = await ACIApi.interact(baseUrl, activeSessionId, content);
       const finalDeltaCount = await pullAssistantDeltas(activeSessionId);
       if (finalDeltaCount > 0) {
         hasLiveAssistantOutput = true;
@@ -555,7 +558,7 @@ export function App(): JSX.Element {
 
     const assistantOutput = `<tool_call>\n${JSON.stringify(payload, null, 2)}\n</tool_call>`;
     setEntries((prev) => [...prev, nowEntry("simulator", assistantOutput)]);
-    const result = await contextUiApi.simulateAssistantOutput(baseUrl, sessionId, assistantOutput);
+    const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, assistantOutput);
     applyInteractionResult(result);
     await loadSessionState(sessionId);
   }
@@ -604,7 +607,7 @@ export function App(): JSX.Element {
       }
 
       const params = collectActionParams(selectedWindow, selectedAction);
-      const result = await contextUiApi.runWindowAction(baseUrl, sessionId, selectedWindow.id, selectedAction.id, params);
+      const result = await ACIApi.runWindowAction(baseUrl, sessionId, selectedWindow.id, selectedAction.id, params);
 
       setEntries((prev) => [
         ...prev,
@@ -691,7 +694,7 @@ export function App(): JSX.Element {
       <header className="topbar">
         <div className="topbar-title">
           <h1>Aperture Debug Workbench</h1>
-          <p>ContextUI Electron Interface</p>
+          <p>ACI Electron Interface</p>
         </div>
         <button className="button secondary" disabled={busy || interacting} onClick={() => void refreshCurrentSession()}>
           <Icons.Refresh />
@@ -780,7 +783,11 @@ export function App(): JSX.Element {
 
           <div className="composer">
             <div className="mode-row">
-              <button className={`chip ${composerMode === "llm" ? "chip-active" : ""}`} disabled={busy || interacting} onClick={() => setComposerMode("llm")}>
+              <button
+                className={`chip ${composerMode === "llm" ? "chip-active" : ""}`}
+                disabled={busy || interacting}
+                onClick={() => setComposerMode("llm")}
+              >
                 LLM
               </button>
               <button
@@ -936,7 +943,12 @@ export function App(): JSX.Element {
                       <button className="button" style={{ flex: 1 }} disabled={busy || interacting} onClick={() => void simulateActionToolCall()}>
                         Simulate Action
                       </button>
-                      <button className="button secondary" style={{ flex: 1 }} disabled={busy || interacting} onClick={() => void invokeActionDirectly()}>
+                      <button
+                        className="button secondary"
+                        style={{ flex: 1 }}
+                        disabled={busy || interacting}
+                        onClick={() => void invokeActionDirectly()}
+                      >
                         Direct Invoke
                       </button>
                     </div>

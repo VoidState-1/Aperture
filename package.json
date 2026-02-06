@@ -2,7 +2,7 @@
   "name": "aperture-electron",
   "version": "0.1.0",
   "private": true,
-  "description": "ContextUI debug workbench built with Electron + React + TypeScript",
+  "description": "ACI debug workbench built with Electron + React + TypeScript",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {

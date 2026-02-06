@@ -68,7 +68,7 @@ function decodeJsonOrThrow(text: string): unknown {
     const looksLikeHtml =
       snippet.startsWith("<!DOCTYPE html") || snippet.startsWith("<html");
     const hint = looksLikeHtml
-      ? 'It looks like HTML. "Server URL" likely points to a website, not ContextUI backend.'
+      ? 'It looks like HTML. "Server URL" likely points to a website, not ACI backend.'
       : "Server URL may be incorrect, or backend returned non-JSON output.";
 
     throw new Error(
@@ -187,7 +187,7 @@ function parseInteractionResponse(raw: unknown): InteractionResponse {
   };
 }
 
-export const contextUiApi = {
+export const ACIApi = {
   async createSession(baseUrl: string): Promise<SessionInfo> {
     const raw = await requestJson(baseUrl, "/api/sessions/", { method: "POST" });
     const data = asRecord(raw);
