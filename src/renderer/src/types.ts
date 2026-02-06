@@ -71,9 +71,17 @@ export interface ActionInvokeResponse {
   summary: string | null;
 }
 
+export interface ContextTimelineItem {
+  id: string;
+  type: string;
+  seq: number;
+  isObsolete: boolean;
+  rawContent: string;
+  estimatedTokens: number;
+}
+
 export interface TranscriptEntry {
   role: TranscriptRole;
   content: string;
   time: Date;
 }
-

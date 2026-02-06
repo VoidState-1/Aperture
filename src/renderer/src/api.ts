@@ -4,6 +4,7 @@ import type {
   ActionParameterDef,
   ActionResultInfo,
   AppInfo,
+  ContextTimelineItem,
   InteractionResponse,
   SessionInfo,
   TokenUsage,
@@ -286,6 +287,30 @@ export const contextUiApi = {
     return raw.text ?? "";
   },
 
+  async getContextTimeline(
+    baseUrl: string,
+    sessionId: string,
+    includeObsolete: boolean
+  ): Promise<ContextTimelineItem[]> {
+    const encoded = includeObsolete ? "true" : "false";
+    const raw = await requestJson(
+      baseUrl,
+      `/api/sessions/${sessionId}/context?includeObsolete=${encoded}`
+    );
+
+    return asArray(raw).map((item) => {
+      const data = asRecord(item);
+      return {
+        id: String(data.id ?? ""),
+        type: String(data.type ?? ""),
+        seq: toInt(data.seq),
+        isObsolete: toBool(data.isObsolete),
+        rawContent: String(data.rawContent ?? ""),
+        estimatedTokens: toInt(data.estimatedTokens)
+      };
+    });
+  },
+
   async runWindowAction(
     baseUrl: string,
     sessionId: string,
@@ -310,4 +335,3 @@ export const contextUiApi = {
     };
   }
 };
-

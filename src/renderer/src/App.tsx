@@ -9,7 +9,7 @@ import type {
   SimulatorMode,
   TranscriptEntry,
   WindowAction,
-  WindowInfo
+  WindowInfo,
 } from "./types";
 
 const DEFAULT_MANUAL_OUTPUT = `<tool_call>
@@ -18,6 +18,47 @@ const DEFAULT_MANUAL_OUTPUT = `<tool_call>
 
 const EMPTY_APPS: AppInfo[] = [];
 const EMPTY_WINDOWS: WindowInfo[] = [];
+
+// Icons
+const Icons = {
+  Refresh: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M23 4v6h-6" />
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+  ),
+  Plus: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+  ),
+  Trash: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" y1="11" x2="10" y2="17" />
+      <line x1="14" y1="11" x2="14" y2="17" />
+    </svg>
+  ),
+  Send: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
+  ),
+  Terminal: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  ),
+  Zap: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    </svg>
+  ),
+};
 
 function nowEntry(role: TranscriptEntry["role"], content: string): TranscriptEntry {
   return { role, content, time: new Date() };
@@ -36,12 +77,8 @@ function formatSessionLabel(session: SessionInfo): string {
   }
 
   const d = session.createdAt;
-  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-  const time = `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes()
-  ).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
   return `${session.sessionId} [${date} ${time}]`;
 }
 
@@ -84,7 +121,7 @@ function errorText(err: unknown): string {
 }
 
 export function App(): JSX.Element {
-  const [baseUrl, setBaseUrl] = useState("http://localhost:5000");
+  const [baseUrl, setBaseUrl] = useState("http://localhost:5228");
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [apps, setApps] = useState<AppInfo[]>(EMPTY_APPS);
@@ -104,22 +141,23 @@ export function App(): JSX.Element {
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
 
   const [includeObsolete, setIncludeObsolete] = useState(true);
+  const [inspectorTab, setInspectorTab] = useState<"context" | "llm" | "windows">("windows");
   const [busy, setBusy] = useState(false);
+  const [interacting, setInteracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [actionParamText, setActionParamText] = useState<Record<string, string>>({});
   const [actionParamBool, setActionParamBool] = useState<Record<string, boolean | null>>({});
 
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const pollTimerRef = useRef<number | null>(null);
+  const seenAssistantSeqRef = useRef<Set<number>>(new Set());
 
-  const selectedWindow = useMemo(
-    () => windows.find((window) => window.id === selectedActionWindowId) ?? null,
-    [selectedActionWindowId, windows]
-  );
+  const selectedWindow = useMemo(() => windows.find((window) => window.id === selectedActionWindowId) ?? null, [selectedActionWindowId, windows]);
 
   const selectedAction = useMemo(
     () => selectedWindow?.actions.find((action) => action.id === selectedActionId) ?? null,
-    [selectedActionId, selectedWindow]
+    [selectedActionId, selectedWindow],
   );
 
   useEffect(() => {
@@ -132,7 +170,16 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!transcriptRef.current) return;
     transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight + 64;
-  }, [entries, busy]);
+  }, [entries, busy, interacting]);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current != null) {
+        window.clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, []);
 
   async function runGuarded(action: () => Promise<void>): Promise<void> {
     if (busy) return;
@@ -229,7 +276,11 @@ export function App(): JSX.Element {
     }
 
     if (normalizedType === "json" || normalizedType === "object" || normalizedType === "map") {
-      return JSON.parse(raw);
+      try {
+        return JSON.parse(raw);
+      } catch (e) {
+        throw new Error(`Invalid JSON: ${errorText(e)}`);
+      }
     }
 
     return raw;
@@ -268,44 +319,83 @@ export function App(): JSX.Element {
     return params;
   }
 
-  function applyInteractionResult(result: InteractionResponse): void {
+  function applyInteractionResult(result: InteractionResponse, options?: { skipResponse?: boolean }): void {
     if (!result.success) {
       setEntries((prev) => [...prev, nowEntry("system", `Request failed: ${result.error ?? "unknown"}`)]);
       return;
     }
 
     const lines: string[] = [];
-    if ((result.response ?? "").length > 0) {
+    if (!options?.skipResponse && (result.response ?? "").length > 0) {
       lines.push(result.response ?? "");
     }
     if (result.action) {
       lines.push(
-        `[action] type=${result.action.type}, app=${result.action.appName}, window=${result.action.windowId}, actionId=${result.action.actionId}`
+        `[action] type=${result.action.type}, app=${result.action.appName}, window=${result.action.windowId}, actionId=${result.action.actionId}`,
       );
     }
     if (result.actionResult) {
       lines.push(
-        `[actionResult] success=${result.actionResult.success}, message=${result.actionResult.message ?? ""}, summary=${result.actionResult.summary ?? ""}`
+        `[actionResult] success=${result.actionResult.success}, message=${result.actionResult.message ?? ""}, summary=${result.actionResult.summary ?? ""}`,
       );
     }
     if (result.usage) {
-      lines.push(
-        `[usage] prompt=${result.usage.promptTokens}, completion=${result.usage.completionTokens}, total=${result.usage.totalTokens}`
-      );
+      lines.push(`[usage] prompt=${result.usage.promptTokens}, completion=${result.usage.completionTokens}, total=${result.usage.totalTokens}`);
     }
 
-    setEntries((prev) => [...prev, nowEntry("assistant", lines.join("\n"))]);
+    if (lines.length > 0) {
+      setEntries((prev) => [...prev, nowEntry("assistant", lines.join("\n"))]);
+    }
   }
 
-  async function loadSessionState(
-    sessionId: string,
-    includeObsoleteValue = includeObsolete
-  ): Promise<void> {
+  function stopInteractionPolling(): void {
+    if (pollTimerRef.current != null) {
+      window.clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }
+
+  function isAssistantTimelineType(type: string): boolean {
+    const normalized = type.trim().toLowerCase().replace(/[\s_-]/g, "");
+    return normalized.startsWith("assistant");
+  }
+
+  async function initAssistantTracking(sessionId: string): Promise<void> {
+    const timeline = await contextUiApi.getContextTimeline(baseUrl, sessionId, true);
+    const seen = new Set<number>();
+
+    for (const item of timeline) {
+      if (!isAssistantTimelineType(item.type)) continue;
+      seen.add(item.seq);
+    }
+
+    seenAssistantSeqRef.current = seen;
+  }
+
+  async function pullAssistantDeltas(sessionId: string): Promise<number> {
+    const timeline = await contextUiApi.getContextTimeline(baseUrl, sessionId, true);
+    const items = timeline
+      .filter((item) => isAssistantTimelineType(item.type) && !seenAssistantSeqRef.current.has(item.seq))
+      .sort((left, right) => left.seq - right.seq);
+
+    if (items.length === 0) {
+      return 0;
+    }
+
+    setEntries((prev) => [...prev, ...items.map((item) => nowEntry("assistant", item.rawContent))]);
+    for (const item of items) {
+      seenAssistantSeqRef.current.add(item.seq);
+    }
+
+    return items.length;
+  }
+
+  async function loadSessionState(sessionId: string, includeObsoleteValue = includeObsolete): Promise<void> {
     const [nextWindows, nextApps, nextRawContext, nextRawLlmInput] = await Promise.all([
       contextUiApi.getWindows(baseUrl, sessionId),
       contextUiApi.getApps(baseUrl, sessionId),
       contextUiApi.getRawContext(baseUrl, sessionId, includeObsoleteValue),
-      contextUiApi.getRawLlmInput(baseUrl, sessionId)
+      contextUiApi.getRawLlmInput(baseUrl, sessionId),
     ]);
 
     setWindows(nextWindows);
@@ -389,22 +479,11 @@ export function App(): JSX.Element {
   }
 
   async function sendComposer(): Promise<void> {
-    await runGuarded(async () => {
-      const sessionId = await ensureSessionReady();
-      if (!sessionId) return;
+    if (composerMode !== "llm") {
+      await runGuarded(async () => {
+        const sessionId = await ensureSessionReady();
+        if (!sessionId) return;
 
-      if (composerMode === "llm") {
-        const content = composerInput.trim();
-        if (content.length === 0) {
-          throw new Error("Message cannot be empty");
-        }
-
-        setComposerInput("");
-        setEntries((prev) => [...prev, nowEntry("user", content)]);
-
-        const result = await contextUiApi.interact(baseUrl, sessionId, content);
-        applyInteractionResult(result);
-      } else {
         const content = manualOutputInput.trim();
         if (content.length === 0) {
           throw new Error("Assistant output cannot be empty");
@@ -413,17 +492,68 @@ export function App(): JSX.Element {
         setEntries((prev) => [...prev, nowEntry("simulator", content)]);
         const result = await contextUiApi.simulateAssistantOutput(baseUrl, sessionId, content);
         applyInteractionResult(result);
-      }
+        await loadSessionState(sessionId);
+      });
+      return;
+    }
 
-      await loadSessionState(sessionId);
-    });
+    if (interacting) return;
+
+    setError(null);
+    const content = composerInput.trim();
+    if (content.length === 0) {
+      setError("Message cannot be empty");
+      return;
+    }
+
+    let sessionId: string | null = null;
+    try {
+      sessionId = await ensureSessionReady();
+      if (!sessionId) return;
+
+      setInteracting(true);
+      setComposerInput("");
+      setEntries((prev) => [...prev, nowEntry("user", content)]);
+
+      await initAssistantTracking(sessionId);
+
+      const activeSessionId = sessionId;
+      let hasLiveAssistantOutput = false;
+      const poll = async () => {
+        const deltaCount = await pullAssistantDeltas(activeSessionId);
+        if (deltaCount > 0) {
+          hasLiveAssistantOutput = true;
+        }
+      };
+
+      stopInteractionPolling();
+      pollTimerRef.current = window.setInterval(() => {
+        void poll().catch(() => {
+          // Keep loop resilient; final request result still determines success/failure.
+        });
+      }, 700);
+
+      const result = await contextUiApi.interact(baseUrl, activeSessionId, content);
+      const finalDeltaCount = await pullAssistantDeltas(activeSessionId);
+      if (finalDeltaCount > 0) {
+        hasLiveAssistantOutput = true;
+      }
+      applyInteractionResult(result, { skipResponse: hasLiveAssistantOutput });
+      await loadSessionState(activeSessionId);
+    } catch (err) {
+      setError(errorText(err));
+      setEntries((prev) => [...prev, nowEntry("system", `Request failed: ${errorText(err)}`)]);
+    } finally {
+      stopInteractionPolling();
+      setInteracting(false);
+    }
   }
 
   async function simulateToolCall(payload: Record<string, unknown>): Promise<void> {
     const sessionId = await ensureSessionReady();
     if (!sessionId) return;
 
-    const assistantOutput = `<tool_call>\n${JSON.stringify(payload)}\n</tool_call>`;
+    const assistantOutput = `<tool_call>\n${JSON.stringify(payload, null, 2)}\n</tool_call>`;
     setEntries((prev) => [...prev, nowEntry("simulator", assistantOutput)]);
     const result = await contextUiApi.simulateAssistantOutput(baseUrl, sessionId, assistantOutput);
     applyInteractionResult(result);
@@ -458,8 +588,8 @@ export function App(): JSX.Element {
         arguments: {
           window_id: selectedWindow.id,
           action_id: selectedAction.id,
-          params
-        }
+          params,
+        },
       });
     });
   }
@@ -474,20 +604,14 @@ export function App(): JSX.Element {
       }
 
       const params = collectActionParams(selectedWindow, selectedAction);
-      const result = await contextUiApi.runWindowAction(
-        baseUrl,
-        sessionId,
-        selectedWindow.id,
-        selectedAction.id,
-        params
-      );
+      const result = await contextUiApi.runWindowAction(baseUrl, sessionId, selectedWindow.id, selectedAction.id, params);
 
       setEntries((prev) => [
         ...prev,
         nowEntry(
           "system",
-          `Direct invoke ${selectedWindow.id}.${selectedAction.id}: success=${result.success}, message=${result.message ?? ""}, summary=${result.summary ?? ""}`
-        )
+          `Direct invoke ${selectedWindow.id}.${selectedAction.id}: success=${result.success}, message=${result.message ?? ""}, summary=${result.summary ?? ""}`,
+        ),
       ]);
 
       await loadSessionState(sessionId);
@@ -536,7 +660,7 @@ export function App(): JSX.Element {
             const next = event.target.value;
             setActionParamBool((prev) => ({
               ...prev,
-              [key]: next === "unset" ? null : next === "true"
+              [key]: next === "unset" ? null : next === "true",
             }));
           }}
         >
@@ -567,72 +691,82 @@ export function App(): JSX.Element {
       <header className="topbar">
         <div className="topbar-title">
           <h1>Aperture Debug Workbench</h1>
-          <p>Electron + React + TypeScript</p>
+          <p>ContextUI Electron Interface</p>
         </div>
-        <button className="button secondary" disabled={busy} onClick={() => void refreshCurrentSession()}>
+        <button className="button secondary" disabled={busy || interacting} onClick={() => void refreshCurrentSession()}>
+          <Icons.Refresh />
           Refresh
         </button>
       </header>
 
-      <section className="card connection">
-        <div className="field">
-          <label>Server URL</label>
-          <input
-            className="input"
-            disabled={busy}
-            value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
-            placeholder="http://localhost:5000"
-          />
-        </div>
-        <div className="field">
-          <label>Session</label>
-          <select
-            className="input"
-            disabled={busy}
-            value={selectedSessionId ?? ""}
-            onChange={(event) => {
-              const value = event.target.value;
-              setSelectedSessionId(value.length === 0 ? null : value);
-              if (value.length > 0) {
-                void runGuarded(async () => {
-                  await loadSessionState(value);
-                });
-              }
-            }}
-          >
-            {sessions.length === 0 && <option value="">No session</option>}
-            {sessions.map((session) => (
-              <option key={session.sessionId} value={session.sessionId}>
-                {formatSessionLabel(session)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="connection-actions">
-          <button className="button secondary" disabled={busy} onClick={() => void runGuarded(() => reloadSessionCatalog(true))}>
-            Reload
-          </button>
-          <button className="button" disabled={busy} onClick={() => void createSession()}>
-            New Session
-          </button>
-          <button className="button danger" disabled={busy || !selectedSessionId} onClick={() => void deleteCurrentSession()}>
-            Close Session
-          </button>
+      <section className="connection">
+        <div className="connection-row">
+          <div className="field">
+            <label>Server URL</label>
+            <input
+              className="input"
+              disabled={busy || interacting}
+              value={baseUrl}
+              onChange={(event) => setBaseUrl(event.target.value)}
+              placeholder="http://localhost:5228"
+            />
+          </div>
+          <div className="field">
+            <label>Session</label>
+            <select
+              className="input"
+              disabled={busy || interacting}
+              value={selectedSessionId ?? ""}
+              onChange={(event) => {
+                const value = event.target.value;
+                setSelectedSessionId(value.length === 0 ? null : value);
+                if (value.length > 0) {
+                  void runGuarded(async () => {
+                    await loadSessionState(value);
+                  });
+                }
+              }}
+            >
+              {sessions.length === 0 && <option value="">No session</option>}
+              {sessions.map((session) => (
+                <option key={session.sessionId} value={session.sessionId}>
+                  {formatSessionLabel(session)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="connection-actions">
+            <button className="button secondary" disabled={busy || interacting} onClick={() => void runGuarded(() => reloadSessionCatalog(true))}>
+              <Icons.Terminal />
+              Reload
+            </button>
+            <button className="button" disabled={busy || interacting} onClick={() => void createSession()}>
+              <Icons.Plus />
+              New
+            </button>
+            <button className="button danger" disabled={busy || interacting || !selectedSessionId} onClick={() => void deleteCurrentSession()}>
+              <Icons.Trash />
+              Close
+            </button>
+          </div>
         </div>
       </section>
 
       {error && (
-        <section className="card error-banner">
+        <section className="error-banner">
           <strong>Error:</strong> {error}
         </section>
       )}
 
       <main className="panels">
-        <section className="card panel">
-          <div className="panel-title">Chat</div>
+        {/* PANEL 1: CHAT */}
+        <section className="panel">
+          <div className="panel-title">
+            <Icons.Send />
+            Interaction
+          </div>
           <div className="transcript" ref={transcriptRef}>
-            {entries.length === 0 && <div className="empty">No transcript yet.</div>}
+            {entries.length === 0 && <div className="empty">No activity recorded for this session.</div>}
             {entries.map((entry, index) => (
               <div className={`entry role-${entry.role}`} key={`${entry.time.toISOString()}-${index}`}>
                 <div className="entry-meta">
@@ -646,223 +780,246 @@ export function App(): JSX.Element {
 
           <div className="composer">
             <div className="mode-row">
-              <button
-                className={`chip ${composerMode === "llm" ? "chip-active" : ""}`}
-                disabled={busy}
-                onClick={() => setComposerMode("llm")}
-              >
+              <button className={`chip ${composerMode === "llm" ? "chip-active" : ""}`} disabled={busy || interacting} onClick={() => setComposerMode("llm")}>
                 LLM
               </button>
               <button
                 className={`chip ${composerMode === "simulatedAssistant" ? "chip-active" : ""}`}
-                disabled={busy}
+                disabled={busy || interacting}
                 onClick={() => setComposerMode("simulatedAssistant")}
               >
-                Simulated Assistant
+                Simulated AI
               </button>
             </div>
 
             {composerMode === "llm" ? (
               <textarea
                 className="input textarea"
-                disabled={busy}
+                disabled={busy || interacting}
                 value={composerInput}
                 onChange={(event) => setComposerInput(event.target.value)}
-                placeholder="Type user message..."
+                placeholder="Send a message to the AI..."
               />
             ) : (
               <textarea
                 className="input textarea mono"
-                disabled={busy}
+                disabled={busy || interacting}
                 value={manualOutputInput}
                 onChange={(event) => setManualOutputInput(event.target.value)}
                 placeholder="<tool_call>...</tool_call>"
               />
             )}
-            <button className="button" disabled={busy} onClick={() => void sendComposer()}>
-              Send
+            <button
+              className="button"
+              disabled={busy || interacting || (composerMode === "llm" ? !composerInput.trim() : !manualOutputInput.trim())}
+              onClick={() => void sendComposer()}
+            >
+              <Icons.Send />
+              {interacting ? "Running Loop..." : "Execute"}
             </button>
           </div>
         </section>
 
-        <section className="card panel">
-          <div className="panel-title">Simulator</div>
-          <div className="mode-row">
-            <button
-              className={`chip ${simulatorMode === "create" ? "chip-active" : ""}`}
-              disabled={busy}
-              onClick={() => setSimulatorMode("create")}
-            >
-              Create
-            </button>
-            <button
-              className={`chip ${simulatorMode === "action" ? "chip-active" : ""}`}
-              disabled={busy}
-              onClick={() => setSimulatorMode("action")}
-            >
-              Action
-            </button>
+        {/* PANEL 2: SIMULATOR */}
+        <section className="panel">
+          <div className="panel-title">
+            <Icons.Zap />
+            Simulator
           </div>
-
-          {simulatorMode === "create" ? (
-            <div className="stack">
-              <div className="field">
-                <label>App name</label>
-                <select
-                  className="input"
-                  disabled={busy}
-                  value={selectedCreateApp ?? ""}
-                  onChange={(event) => setSelectedCreateApp(event.target.value)}
-                >
-                  {apps.length === 0 && <option value="">No app</option>}
-                  {apps.map((app) => (
-                    <option key={app.name} value={app.name}>
-                      {app.name}
-                      {app.isStarted ? " (started)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Target (optional)</label>
-                <input
-                  className="input"
-                  disabled={busy}
-                  value={createTarget}
-                  onChange={(event) => setCreateTarget(event.target.value)}
-                  placeholder="Intent/target for app launch"
-                />
-              </div>
-              <button className="button" disabled={busy} onClick={() => void simulateCreateToolCall()}>
-                Simulate tool_call
+          <div className="stack">
+            <div className="mode-row">
+              <button
+                className={`chip ${simulatorMode === "create" ? "chip-active" : ""}`}
+                disabled={busy || interacting}
+                onClick={() => setSimulatorMode("create")}
+              >
+                Create App
+              </button>
+              <button
+                className={`chip ${simulatorMode === "action" ? "chip-active" : ""}`}
+                disabled={busy || interacting}
+                onClick={() => setSimulatorMode("action")}
+              >
+                Window Action
               </button>
             </div>
-          ) : (
-            <div className="stack">
-              <div className="field">
-                <label>Window</label>
-                <select
-                  className="input"
-                  disabled={busy}
-                  value={selectedActionWindowId ?? ""}
-                  onChange={(event) => onSelectActionWindow(event.target.value)}
-                >
-                  {windows.length === 0 && <option value="">No window</option>}
-                  {windows.map((window) => (
-                    <option key={window.id} value={window.id}>
-                      {window.id} ({window.appName ?? "unknown"})
-                    </option>
-                  ))}
-                </select>
-              </div>
 
-              <div className="field">
-                <label>Action</label>
-                <select
-                  className="input"
-                  disabled={busy || !selectedWindow}
-                  value={selectedActionId ?? ""}
-                  onChange={(event) => onSelectAction(event.target.value)}
-                >
-                  {!selectedWindow && <option value="">No action</option>}
-                  {selectedWindow?.actions.map((action) => (
-                    <option key={action.id} value={action.id}>
-                      {action.id} ({action.label})
-                    </option>
-                  ))}
-                </select>
+            {simulatorMode === "create" ? (
+              <div className="stack" style={{ padding: 0 }}>
+                <div className="field">
+                  <label>Application</label>
+                  <select
+                    className="input"
+                    disabled={busy || interacting}
+                    value={selectedCreateApp ?? ""}
+                    onChange={(event) => setSelectedCreateApp(event.target.value)}
+                  >
+                    {apps.length === 0 && <option value="">No apps available</option>}
+                    {apps.map((app) => (
+                      <option key={app.name} value={app.name}>
+                        {app.name} {app.isStarted ? "• Active" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Target / Intent (optional)</label>
+                  <input
+                    className="input"
+                    disabled={busy || interacting}
+                    value={createTarget}
+                    onChange={(event) => setCreateTarget(event.target.value)}
+                    placeholder="e.g. 'open settings'"
+                  />
+                </div>
+                <button className="button" disabled={busy || interacting || !selectedCreateApp} onClick={() => void simulateCreateToolCall()}>
+                  Simulate Create
+                </button>
               </div>
+            ) : (
+              <div className="stack" style={{ padding: 0 }}>
+                <div className="field">
+                  <label>Target Window</label>
+                  <select
+                    className="input"
+                    disabled={busy || interacting}
+                    value={selectedActionWindowId ?? ""}
+                    onChange={(event) => onSelectActionWindow(event.target.value)}
+                  >
+                    {windows.length === 0 && <option value="">No active windows</option>}
+                    {windows.map((window) => (
+                      <option key={window.id} value={window.id}>
+                        {window.id} ({window.appName ?? "unknown"})
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              {selectedAction ? (
-                <>
-                  <div className="field">
-                    <label>Parameters</label>
-                    <div className="param-list">
-                      {selectedAction.parameters.length === 0 && (
-                        <div className="empty small">This action has no parameters.</div>
-                      )}
-                      {selectedAction.parameters.map((param) => (
-                        <div className="param-row" key={param.name}>
-                          <span className="param-name">
-                            {param.name} ({param.type})
-                            {param.required ? " *" : ""}
-                          </span>
-                          {renderParamEditor(param)}
-                        </div>
-                      ))}
+                <div className="field">
+                  <label>Action</label>
+                  <select
+                    className="input"
+                    disabled={busy || interacting || !selectedWindow}
+                    value={selectedActionId ?? ""}
+                    onChange={(event) => onSelectAction(event.target.value)}
+                  >
+                    {!selectedWindow && <option value="">Select a window first</option>}
+                    {selectedWindow?.actions.map((action) => (
+                      <option key={action.id} value={action.id}>
+                        {action.label} ({action.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedAction ? (
+                  <div className="stack" style={{ padding: 0 }}>
+                    <div className="field">
+                      <label>Action Parameters</label>
+                      <div className="param-list">
+                        {selectedAction.parameters.length === 0 && (
+                          <div className="empty" style={{ padding: "10px" }}>
+                            No parameters for this action.
+                          </div>
+                        )}
+                        {selectedAction.parameters.map((param) => (
+                          <div className="param-row" key={param.name}>
+                            <span className="param-name">
+                              {param.name} {param.required ? "*" : ""}
+                            </span>
+                            {renderParamEditor(param)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="row" style={{ marginTop: "8px" }}>
+                      <button className="button" style={{ flex: 1 }} disabled={busy || interacting} onClick={() => void simulateActionToolCall()}>
+                        Simulate Action
+                      </button>
+                      <button className="button secondary" style={{ flex: 1 }} disabled={busy || interacting} onClick={() => void invokeActionDirectly()}>
+                        Direct Invoke
+                      </button>
                     </div>
                   </div>
-                  <div className="row">
-                    <button className="button" disabled={busy} onClick={() => void simulateActionToolCall()}>
-                      Simulate tool_call
-                    </button>
-                    <button className="button secondary" disabled={busy} onClick={() => void invokeActionDirectly()}>
-                      Invoke directly
-                    </button>
+                ) : (
+                  <div className="empty" style={{ padding: "20px" }}>
+                    Select an action to continue.
                   </div>
-                </>
-              ) : (
-                <div className="empty small">Select a window and action first.</div>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            )}
+          </div>
         </section>
 
-        <section className="card panel">
-          <div className="panel-title">Inspector</div>
-          <div className="field row">
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={includeObsolete}
-                disabled={busy}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setIncludeObsolete(checked);
-                  if (selectedSessionId) {
-                    void runGuarded(async () => {
-                      await loadSessionState(selectedSessionId, checked);
-                    });
-                  }
-                }}
-              />
-              includeObsolete
-            </label>
+        {/* PANEL 3: INSPECTOR */}
+        <section className="panel">
+          <div className="panel-title">
+            <Icons.Terminal />
+            System Inspector
+          </div>
+          <div className="mode-row" style={{ padding: "0 16px", marginTop: "12px" }}>
+            <button className={`chip ${inspectorTab === "context" ? "chip-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("context")}>
+              Context
+            </button>
+            <button className={`chip ${inspectorTab === "llm" ? "chip-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("llm")}>
+              LLM Input
+            </button>
+            <button className={`chip ${inspectorTab === "windows" ? "chip-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("windows")}>
+              Windows ({windows.length})
+            </button>
           </div>
 
-          <details open>
-            <summary>Raw Context</summary>
-            <pre className="mono block">{rawContext.trim().length > 0 ? rawContext : "No data loaded."}</pre>
-          </details>
+          <div className="inspector-content stack" style={{ marginTop: "8px" }}>
+            {inspectorTab === "context" && (
+              <div className="stack" style={{ padding: 0, flex: 1 }}>
+                <div className="field row" style={{ flexShrink: 0 }}>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={includeObsolete}
+                      disabled={busy || interacting}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setIncludeObsolete(checked);
+                        if (selectedSessionId) {
+                          void runGuarded(async () => {
+                            await loadSessionState(selectedSessionId, checked);
+                          });
+                        }
+                      }}
+                    />
+                    Show Obsolete Context
+                  </label>
+                </div>
+                <pre className="block" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+                  {rawContext.trim().length > 0 ? rawContext : "Empty context"}
+                </pre>
+              </div>
+            )}
 
-          <details open>
-            <summary>Raw LLM Input</summary>
-            <pre className="mono block">{rawLlmInput.trim().length > 0 ? rawLlmInput : "No data loaded."}</pre>
-          </details>
+            {inspectorTab === "llm" && (
+              <pre className="block" style={{ flex: 1, minHeight: 0, overflow: "auto", margin: 0 }}>
+                {rawLlmInput.trim().length > 0 ? rawLlmInput : "No input data"}
+              </pre>
+            )}
 
-          <details open>
-            <summary>Windows ({windows.length})</summary>
-            <div className="stack">
-              {windows.length === 0 && <div className="empty small">No windows in current session.</div>}
-              {windows.map((window) => (
-                <details key={window.id}>
-                  <summary>
-                    {window.id} ({window.appName ?? "unknown"}) | createdAt={window.createdAt} updatedAt=
-                    {window.updatedAt}
-                  </summary>
-                  <pre className="mono block">{window.content}</pre>
-                  <div className="chips">
-                    {window.actions.map((action) => (
-                      <span className="chip mini" key={`${window.id}-${action.id}`}>
-                        {action.id}
-                        {action.parameters.length > 0 ? ` (${action.parameters.length})` : ""}
-                      </span>
-                    ))}
-                  </div>
-                </details>
-              ))}
-            </div>
-          </details>
+            {inspectorTab === "windows" && (
+              <div className="stack" style={{ padding: 0, overflowY: "auto", flex: 1, minHeight: 0 }}>
+                {windows.length === 0 && <div className="empty">No windows found.</div>}
+                {windows.map((window) => (
+                  <details key={window.id}>
+                    <summary>
+                      {window.id} <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>• {window.appName}</span>
+                    </summary>
+                    <div className="block">
+                      <div style={{ marginBottom: "8px", color: "var(--accent)" }}>// content</div>
+                      {window.content}
+                    </div>
+                  </details>
+                ))}
+              </div>
+            )}
+          </div>
         </section>
       </main>
     </div>
