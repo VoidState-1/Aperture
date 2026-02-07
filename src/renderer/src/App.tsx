@@ -13,7 +13,7 @@ import type {
 } from "./types";
 
 const DEFAULT_MANUAL_OUTPUT = `<tool_call>
-{"name":"create","arguments":{"name":"launcher"}}
+{"window_id":"launcher","action_id":"open","params":{"app":"file_explorer"}}
 </tool_call>`;
 
 const EMPTY_APPS: AppInfo[] = [];
@@ -569,13 +569,17 @@ export function App(): JSX.Element {
         throw new Error("Select an app first");
       }
 
-      const args: Record<string, unknown> = { name: selectedCreateApp };
+      const params: Record<string, unknown> = { app: selectedCreateApp };
       const target = createTarget.trim();
       if (target.length > 0) {
-        args.target = target;
+        params.target = target;
       }
 
-      await simulateToolCall({ name: "create", arguments: args });
+      await simulateToolCall({
+        window_id: "launcher",
+        action_id: "open",
+        params,
+      });
     });
   }
 
@@ -587,12 +591,9 @@ export function App(): JSX.Element {
 
       const params = collectActionParams(selectedWindow, selectedAction);
       await simulateToolCall({
-        name: "action",
-        arguments: {
-          window_id: selectedWindow.id,
-          action_id: selectedAction.id,
-          params,
-        },
+        window_id: selectedWindow.id,
+        action_id: selectedAction.id,
+        params,
       });
     });
   }
@@ -840,7 +841,7 @@ export function App(): JSX.Element {
                 disabled={busy || interacting}
                 onClick={() => setSimulatorMode("create")}
               >
-                Create App
+                Open App
               </button>
               <button
                 className={`chip ${simulatorMode === "action" ? "chip-active" : ""}`}
@@ -880,7 +881,7 @@ export function App(): JSX.Element {
                   />
                 </div>
                 <button className="button" disabled={busy || interacting || !selectedCreateApp} onClick={() => void simulateCreateToolCall()}>
-                  Simulate Create
+                  Simulate Open
                 </button>
               </div>
             ) : (
