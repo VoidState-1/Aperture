@@ -556,6 +556,7 @@ export function App(): JSX.Element {
     const sessionId = await ensureSessionReady();
     if (!sessionId) return;
 
+    // Simulated assistant output follows backend parser format directly.
     const assistantOutput = `<tool_call>\n${JSON.stringify(payload, null, 2)}\n</tool_call>`;
     setEntries((prev) => [...prev, nowEntry("simulator", assistantOutput)]);
     const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, assistantOutput);
@@ -569,6 +570,7 @@ export function App(): JSX.Element {
         throw new Error("Select an app first");
       }
 
+      // In the new protocol, opening an app is an action on launcher.
       const params: Record<string, unknown> = { app: selectedCreateApp };
       const target = createTarget.trim();
       if (target.length > 0) {
@@ -590,6 +592,7 @@ export function App(): JSX.Element {
       }
 
       const params = collectActionParams(selectedWindow, selectedAction);
+      // Unified action-only tool_call payload.
       await simulateToolCall({
         window_id: selectedWindow.id,
         action_id: selectedAction.id,
