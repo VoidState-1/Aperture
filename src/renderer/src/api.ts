@@ -5,6 +5,7 @@ import type {
   ActionResultInfo,
   AppInfo,
   ContextTimelineItem,
+  InteractionStepInfo,
   InteractionResponse,
   SessionInfo,
   TokenUsage,
@@ -129,6 +130,7 @@ function parseWindowAction(raw: unknown): WindowAction {
   return {
     id: String(data.id ?? ""),
     label: String(data.label ?? ""),
+    mode: data.mode == null ? null : String(data.mode),
     parameters: asArray(data.parameters).map(parseActionParameterDef)
   };
 }
@@ -174,6 +176,22 @@ function parseUsage(raw: unknown): TokenUsage {
   };
 }
 
+function parseInteractionStepInfo(raw: unknown): InteractionStepInfo {
+  const data = asRecord(raw);
+  return {
+    callId: String(data.callId ?? ""),
+    windowId: String(data.windowId ?? ""),
+    actionId: String(data.actionId ?? ""),
+    resolvedMode: String(data.resolvedMode ?? ""),
+    success: toBool(data.success),
+    message: data.message == null ? null : String(data.message),
+    summary: data.summary == null ? null : String(data.summary),
+    taskId: data.taskId == null ? null : String(data.taskId),
+    turn: toInt(data.turn),
+    index: toInt(data.index)
+  };
+}
+
 function parseInteractionResponse(raw: unknown): InteractionResponse {
   const data = asRecord(raw);
   return {
@@ -183,6 +201,7 @@ function parseInteractionResponse(raw: unknown): InteractionResponse {
     action: data.action == null ? null : parseActionInfo(data.action),
     actionResult:
       data.actionResult == null ? null : parseActionResultInfo(data.actionResult),
+    steps: data.steps == null ? null : asArray(data.steps).map(parseInteractionStepInfo),
     usage: data.usage == null ? null : parseUsage(data.usage)
   };
 }

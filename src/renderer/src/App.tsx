@@ -13,7 +13,7 @@ import type {
 } from "./types";
 
 const DEFAULT_MANUAL_OUTPUT = `<tool_call>
-{"window_id":"launcher","action_id":"open","params":{"app":"file_explorer"}}
+{"calls":[{"window_id":"launcher","action_id":"open","params":{"app":"file_explorer"}}]}
 </tool_call>`;
 
 const EMPTY_APPS: AppInfo[] = [];
@@ -339,6 +339,19 @@ export function App(): JSX.Element {
         `[actionResult] success=${result.actionResult.success}, message=${result.actionResult.message ?? ""}, summary=${result.actionResult.summary ?? ""}`,
       );
     }
+    if (result.steps && result.steps.length > 0) {
+      for (const step of result.steps) {
+        lines.push(
+          `[step] call=${step.callId}, turn=${step.turn}, idx=${step.index}, mode=${step.resolvedMode}, target=${step.windowId}.${step.actionId}, success=${step.success}, task=${step.taskId ?? ""}`,
+        );
+        if (step.message) {
+          lines.push(`  message: ${step.message}`);
+        }
+        if (step.summary) {
+          lines.push(`  summary: ${step.summary}`);
+        }
+      }
+    }
     if (result.usage) {
       lines.push(`[usage] prompt=${result.usage.promptTokens}, completion=${result.usage.completionTokens}, total=${result.usage.totalTokens}`);
     }
@@ -552,12 +565,12 @@ export function App(): JSX.Element {
     }
   }
 
-  async function simulateToolCall(payload: Record<string, unknown>): Promise<void> {
+  async function simulateToolCall(calls: Array<Record<string, unknown>>): Promise<void> {
     const sessionId = await ensureSessionReady();
     if (!sessionId) return;
 
     // Simulated assistant output follows backend parser format directly.
-    const assistantOutput = `<tool_call>\n${JSON.stringify(payload, null, 2)}\n</tool_call>`;
+    const assistantOutput = `<tool_call>\n${JSON.stringify({ calls }, null, 2)}\n</tool_call>`;
     setEntries((prev) => [...prev, nowEntry("simulator", assistantOutput)]);
     const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, assistantOutput);
     applyInteractionResult(result);
@@ -577,11 +590,13 @@ export function App(): JSX.Element {
         params.target = target;
       }
 
-      await simulateToolCall({
-        window_id: "launcher",
-        action_id: "open",
-        params,
-      });
+      await simulateToolCall([
+        {
+          window_id: "launcher",
+          action_id: "open",
+          params,
+        },
+      ]);
     });
   }
 
@@ -593,11 +608,13 @@ export function App(): JSX.Element {
 
       const params = collectActionParams(selectedWindow, selectedAction);
       // Unified action-only tool_call payload.
-      await simulateToolCall({
-        window_id: selectedWindow.id,
-        action_id: selectedAction.id,
-        params,
-      });
+      await simulateToolCall([
+        {
+          window_id: selectedWindow.id,
+          action_id: selectedAction.id,
+          params,
+        },
+      ]);
     });
   }
 
@@ -917,7 +934,7 @@ export function App(): JSX.Element {
                     {!selectedWindow && <option value="">Select a window first</option>}
                     {selectedWindow?.actions.map((action) => (
                       <option key={action.id} value={action.id}>
-                        {action.label} ({action.id})
+                        {action.label} ({action.id}) {action.mode ? `• ${action.mode}` : ""}
                       </option>
                     ))}
                   </select>
