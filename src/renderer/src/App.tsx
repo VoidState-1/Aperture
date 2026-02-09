@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ACIApi } from "./api";
 import type {
-  ActionParameterDef,
+  ActionParamSchema,
   AppInfo,
   ComposerMode,
   InteractionResponse,
@@ -82,42 +82,75 @@ function formatSessionLabel(session: SessionInfo): string {
   return `${session.sessionId} [${date} ${time}]`;
 }
 
-function normalizeType(raw: string): string {
-  const lowered = raw.trim().toLowerCase();
-  if (lowered === "integer") return "int";
-  if (lowered === "number") return "float";
-  return lowered;
-}
-
-function isIntType(type: string): boolean {
-  return type === "int";
-}
-
-function isFloatType(type: string): boolean {
-  return type === "float" || type === "double";
-}
-
-function isBoolType(type: string): boolean {
-  return type === "bool" || type === "boolean";
-}
-
-function parseBoolDefault(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  const text = String(value ?? "").toLowerCase();
-  if (text === "true") return true;
-  if (text === "false") return false;
-  return null;
-}
-
-function defaultValueText(value: unknown): string {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value);
-}
-
 function errorText(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err ?? "unknown error");
+}
+
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2);
+}
+
+function buildDefaultPayloadFromSchema(schema: ActionParamSchema | null): unknown {
+  if (!schema) {
+    return {};
+  }
+
+  if (schema.defaultValue !== undefined) {
+    return schema.defaultValue;
+  }
+
+  switch (schema.kind) {
+    case "string":
+      return "";
+    case "integer":
+      return 0;
+    case "number":
+      return 0;
+    case "boolean":
+      return false;
+    case "null":
+      return null;
+    case "array":
+      return [];
+    case "object": {
+      const obj: Record<string, unknown> = {};
+      for (const [name, child] of Object.entries(schema.properties)) {
+        if (child.required || child.defaultValue !== undefined) {
+          obj[name] = buildDefaultPayloadFromSchema(child);
+        }
+      }
+      return obj;
+    }
+    default:
+      return {};
+  }
+}
+
+function schemaSignature(schema: ActionParamSchema | null): string {
+  if (!schema) {
+    return "none";
+  }
+
+  switch (schema.kind) {
+    case "string":
+    case "integer":
+    case "number":
+    case "boolean":
+    case "null":
+      return schema.kind;
+    case "array":
+      return `array<${schemaSignature(schema.items)}>`;
+    case "object": {
+      const fields = Object.entries(schema.properties).map(([name, child]) => {
+        const optional = child.required ? "" : "?";
+        return `${name}:${schemaSignature(child)}${optional}`;
+      });
+      return fields.length === 0 ? "object" : `{ ${fields.join(", ")} }`;
+    }
+    default:
+      return "unknown";
+  }
 }
 
 export function App(): JSX.Element {
@@ -146,8 +179,7 @@ export function App(): JSX.Element {
   const [interacting, setInteracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [actionParamText, setActionParamText] = useState<Record<string, string>>({});
-  const [actionParamBool, setActionParamBool] = useState<Record<string, boolean | null>>({});
+  const [actionParamPayload, setActionParamPayload] = useState<Record<string, string>>({});
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -220,103 +252,44 @@ export function App(): JSX.Element {
     if (window && actionId) {
       const action = actions.find((item) => item.id === actionId) ?? null;
       if (action) {
-        prepareParamEditors(window, action);
+        prepareParamEditor(window, action);
       }
     }
   }
 
-  function paramKey(windowId: string, actionId: string, paramName: string): string {
-    return `${windowId}::${actionId}::${paramName}`;
+  function actionParamKey(windowId: string, actionId: string): string {
+    return `${windowId}::${actionId}`;
   }
 
-  function prepareParamEditors(window: WindowInfo, action: WindowAction): void {
-    const nextText = { ...actionParamText };
-    const nextBool = { ...actionParamBool };
-
-    for (const param of action.parameters) {
-      const key = paramKey(window.id, action.id, param.name);
-      const normalizedType = normalizeType(param.type);
-      if (isBoolType(normalizedType)) {
-        if (!(key in nextBool)) {
-          nextBool[key] = parseBoolDefault(param.defaultValue);
-        }
-      } else if (!(key in nextText)) {
-        nextText[key] = defaultValueText(param.defaultValue);
-      }
+  function prepareParamEditor(window: WindowInfo, action: WindowAction): void {
+    const key = actionParamKey(window.id, action.id);
+    if (key in actionParamPayload) {
+      return;
     }
 
-    setActionParamText(nextText);
-    setActionParamBool(nextBool);
+    const defaultPayload = buildDefaultPayloadFromSchema(action.paramSchema);
+    setActionParamPayload((prev) => ({
+      ...prev,
+      [key]: formatJson(defaultPayload)
+    }));
   }
 
-  function parseTypedParamValue(type: string, raw: string): unknown {
-    const normalizedType = normalizeType(type);
+  function collectActionParams(window: WindowInfo, action: WindowAction): unknown {
+    const key = actionParamKey(window.id, action.id);
+    const raw = (actionParamPayload[key] ?? "").trim();
 
-    if (isIntType(normalizedType)) {
-      const parsed = Number(raw);
-      if (!Number.isInteger(parsed)) {
-        throw new Error(`Expected int for type ${type}, got "${raw}"`);
+    if (raw.length === 0) {
+      if (action.paramSchema?.required) {
+        throw new Error("Action params are required. Please enter valid JSON.");
       }
-      return parsed;
+      return null;
     }
 
-    if (isFloatType(normalizedType)) {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isNaN(parsed)) {
-        throw new Error(`Expected number for type ${type}, got "${raw}"`);
-      }
-      return parsed;
+    try {
+      return JSON.parse(raw);
+    } catch (e) {
+      throw new Error(`Invalid params JSON: ${errorText(e)}`);
     }
-
-    if (isBoolType(normalizedType)) {
-      const lowered = raw.toLowerCase();
-      if (lowered === "true") return true;
-      if (lowered === "false") return false;
-      throw new Error(`Expected bool for type ${type}, got "${raw}"`);
-    }
-
-    if (normalizedType === "json" || normalizedType === "object" || normalizedType === "map") {
-      try {
-        return JSON.parse(raw);
-      } catch (e) {
-        throw new Error(`Invalid JSON: ${errorText(e)}`);
-      }
-    }
-
-    return raw;
-  }
-
-  function collectActionParams(window: WindowInfo, action: WindowAction): Record<string, unknown> {
-    const params: Record<string, unknown> = {};
-
-    for (const param of action.parameters) {
-      const key = paramKey(window.id, action.id, param.name);
-      const normalizedType = normalizeType(param.type);
-
-      if (isBoolType(normalizedType)) {
-        const boolValue = actionParamBool[key];
-        if (boolValue == null) {
-          if (param.required) {
-            throw new Error(`Parameter ${param.name} is required`);
-          }
-          continue;
-        }
-        params[param.name] = boolValue;
-        continue;
-      }
-
-      const raw = (actionParamText[key] ?? "").trim();
-      if (raw.length === 0) {
-        if (param.required) {
-          throw new Error(`Parameter ${param.name} is required`);
-        }
-        continue;
-      }
-
-      params[param.name] = parseTypedParamValue(param.type, raw);
-    }
-
-    return params;
   }
 
   function applyInteractionResult(result: InteractionResponse, options?: { skipResponse?: boolean }): void {
@@ -650,7 +623,7 @@ export function App(): JSX.Element {
     if (window && nextAction) {
       const action = window.actions.find((item) => item.id === nextAction);
       if (action) {
-        prepareParamEditors(window, action);
+        prepareParamEditor(window, action);
       }
     }
   }
@@ -661,51 +634,27 @@ export function App(): JSX.Element {
     if (!window) return;
     const action = window.actions.find((item) => item.id === actionId);
     if (action) {
-      prepareParamEditors(window, action);
+      prepareParamEditor(window, action);
     }
   }
 
-  function renderParamEditor(param: ActionParameterDef): JSX.Element {
+  function renderActionPayloadEditor(): JSX.Element {
     if (!selectedWindow || !selectedAction) {
       return <></>;
     }
 
-    const key = paramKey(selectedWindow.id, selectedAction.id, param.name);
-    const normalizedType = normalizeType(param.type);
-
-    if (isBoolType(normalizedType)) {
-      const current = actionParamBool[key];
-      return (
-        <select
-          className="input"
-          disabled={busy}
-          value={current == null ? "unset" : String(current)}
-          onChange={(event) => {
-            const next = event.target.value;
-            setActionParamBool((prev) => ({
-              ...prev,
-              [key]: next === "unset" ? null : next === "true",
-            }));
-          }}
-        >
-          <option value="true">true</option>
-          <option value="false">false</option>
-          <option value="unset">unset</option>
-        </select>
-      );
-    }
-
-    const value = actionParamText[key] ?? defaultValueText(param.defaultValue);
+    const key = actionParamKey(selectedWindow.id, selectedAction.id);
+    const value = actionParamPayload[key] ?? formatJson(buildDefaultPayloadFromSchema(selectedAction.paramSchema));
     return (
-      <input
-        className="input"
-        disabled={busy}
+      <textarea
+        className="input textarea mono"
+        disabled={busy || interacting}
         value={value}
         onChange={(event) => {
-          const nextValue = event.target.value;
-          setActionParamText((prev) => ({ ...prev, [key]: nextValue }));
+          const next = event.target.value;
+          setActionParamPayload((prev) => ({ ...prev, [key]: next }));
         }}
-        placeholder={param.required ? "required" : "optional"}
+        placeholder='e.g. {"path":"docs","recursive":true}'
       />
     );
   }
@@ -885,7 +834,7 @@ export function App(): JSX.Element {
                     {apps.length === 0 && <option value="">No apps available</option>}
                     {apps.map((app) => (
                       <option key={app.name} value={app.name}>
-                        {app.name} {app.isStarted ? "• Active" : ""}
+                        {app.name} {app.isStarted ? "- Active" : ""}
                       </option>
                     ))}
                   </select>
@@ -934,7 +883,7 @@ export function App(): JSX.Element {
                     {!selectedWindow && <option value="">Select a window first</option>}
                     {selectedWindow?.actions.map((action) => (
                       <option key={action.id} value={action.id}>
-                        {action.label} ({action.id}) {action.mode ? `• ${action.mode}` : ""}
+                        {action.label} ({action.id})
                       </option>
                     ))}
                   </select>
@@ -943,21 +892,10 @@ export function App(): JSX.Element {
                 {selectedAction ? (
                   <div className="stack" style={{ padding: 0 }}>
                     <div className="field">
-                      <label>Action Parameters</label>
-                      <div className="param-list">
-                        {selectedAction.parameters.length === 0 && (
-                          <div className="empty" style={{ padding: "10px" }}>
-                            No parameters for this action.
-                          </div>
-                        )}
-                        {selectedAction.parameters.map((param) => (
-                          <div className="param-row" key={param.name}>
-                            <span className="param-name">
-                              {param.name} {param.required ? "*" : ""}
-                            </span>
-                            {renderParamEditor(param)}
-                          </div>
-                        ))}
+                      <label>Action Params (JSON)</label>
+                      {renderActionPayloadEditor()}
+                      <div className="empty" style={{ padding: "10px", marginTop: "8px" }}>
+                        Schema: {schemaSignature(selectedAction.paramSchema)}
                       </div>
                     </div>
                     <div className="row" style={{ marginTop: "8px" }}>
@@ -1042,7 +980,7 @@ export function App(): JSX.Element {
                 {windows.map((window) => (
                   <details key={window.id}>
                     <summary>
-                      {window.id} <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>• {window.appName}</span>
+                      {window.id} <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>- {window.appName}</span>
                     </summary>
                     <div className="block">
                       <div style={{ marginBottom: "8px", color: "var(--accent)" }}>// content</div>
@@ -1058,3 +996,4 @@ export function App(): JSX.Element {
     </div>
   );
 }
+

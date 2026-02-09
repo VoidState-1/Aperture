@@ -56,18 +56,29 @@ export interface InteractionResponse {
   usage: TokenUsage | null;
 }
 
-export interface ActionParameterDef {
-  name: string;
-  type: string;
+export type ActionParamKind =
+  | "string"
+  | "integer"
+  | "number"
+  | "boolean"
+  | "null"
+  | "object"
+  | "array"
+  | "unknown";
+
+export interface ActionParamSchema {
+  kind: ActionParamKind;
   required: boolean;
+  description: string | null;
+  items: ActionParamSchema | null;
+  properties: Record<string, ActionParamSchema>;
   defaultValue: unknown;
 }
 
 export interface WindowAction {
   id: string;
   label: string;
-  mode: string | null;
-  parameters: ActionParameterDef[];
+  paramSchema: ActionParamSchema | null;
 }
 
 export interface WindowInfo {

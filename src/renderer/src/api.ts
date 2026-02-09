@@ -1,7 +1,8 @@
 import type {
   ActionInfo,
   ActionInvokeResponse,
-  ActionParameterDef,
+  ActionParamKind,
+  ActionParamSchema,
   ActionResultInfo,
   AppInfo,
   ContextTimelineItem,
@@ -115,12 +116,53 @@ async function requestJson(
   return parsed;
 }
 
-function parseActionParameterDef(raw: unknown): ActionParameterDef {
+function parseParamKind(raw: unknown): ActionParamKind {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    switch (Math.trunc(raw)) {
+      case 0:
+        return "string";
+      case 1:
+        return "integer";
+      case 2:
+        return "number";
+      case 3:
+        return "boolean";
+      case 4:
+        return "null";
+      case 5:
+        return "object";
+      case 6:
+        return "array";
+      default:
+        return "unknown";
+    }
+  }
+
+  const lowered = String(raw ?? "").trim().toLowerCase();
+  if (lowered === "string") return "string";
+  if (lowered === "integer" || lowered === "int") return "integer";
+  if (lowered === "number" || lowered === "float" || lowered === "double") return "number";
+  if (lowered === "boolean" || lowered === "bool") return "boolean";
+  if (lowered === "null") return "null";
+  if (lowered === "object") return "object";
+  if (lowered === "array") return "array";
+  return "unknown";
+}
+
+function parseActionParamSchema(raw: unknown): ActionParamSchema {
   const data = asRecord(raw);
+  const parsedProperties: Record<string, ActionParamSchema> = {};
+  const properties = asRecord(data.properties);
+  for (const [name, node] of Object.entries(properties)) {
+    parsedProperties[name] = parseActionParamSchema(node);
+  }
+
   return {
-    name: String(data.name ?? ""),
-    type: String(data.type ?? ""),
-    required: toBool(data.required),
+    kind: parseParamKind(data.kind),
+    required: data.required == null ? true : toBool(data.required),
+    description: data.description == null ? null : String(data.description),
+    items: data.items == null ? null : parseActionParamSchema(data.items),
+    properties: parsedProperties,
     defaultValue: data.default
   };
 }
@@ -130,8 +172,7 @@ function parseWindowAction(raw: unknown): WindowAction {
   return {
     id: String(data.id ?? ""),
     label: String(data.label ?? ""),
-    mode: data.mode == null ? null : String(data.mode),
-    parameters: asArray(data.parameters).map(parseActionParameterDef)
+    paramSchema: data.paramSchema == null ? null : parseActionParamSchema(data.paramSchema)
   };
 }
 
@@ -335,7 +376,7 @@ export const ACIApi = {
     sessionId: string,
     windowId: string,
     actionId: string,
-    params: Record<string, unknown>
+    params: unknown
   ): Promise<ActionInvokeResponse> {
     const raw = await requestJson(
       baseUrl,
