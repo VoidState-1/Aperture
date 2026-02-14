@@ -9,9 +9,10 @@ import type {
   SimulatorMode,
   TranscriptEntry,
   WindowAction,
-  WindowInfo,
+  WindowInfo
 } from "./types";
 
+const DEFAULT_BASE_URL = "http://localhost:5228";
 const DEFAULT_MANUAL_OUTPUT = `<tool_call>
 {"calls":[{"window_id":"launcher","action_id":"open","params":{"app":"file_explorer"}}]}
 </tool_call>`;
@@ -19,46 +20,7 @@ const DEFAULT_MANUAL_OUTPUT = `<tool_call>
 const EMPTY_APPS: AppInfo[] = [];
 const EMPTY_WINDOWS: WindowInfo[] = [];
 
-// Icons
-const Icons = {
-  Refresh: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M23 4v6h-6" />
-      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-    </svg>
-  ),
-  Plus: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="12" y1="5" x2="12" y2="19" />
-      <line x1="5" y1="12" x2="19" y2="12" />
-    </svg>
-  ),
-  Trash: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="3 6 5 6 21 6" />
-      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-      <line x1="10" y1="11" x2="10" y2="17" />
-      <line x1="14" y1="11" x2="14" y2="17" />
-    </svg>
-  ),
-  Send: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
-  ),
-  Terminal: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="4 17 10 11 4 5" />
-      <line x1="12" y1="19" x2="20" y2="19" />
-    </svg>
-  ),
-  Zap: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-    </svg>
-  ),
-};
+type InspectorTab = "context" | "llm" | "windows";
 
 function nowEntry(role: TranscriptEntry["role"], content: string): TranscriptEntry {
   return { role, content, time: new Date() };
@@ -67,19 +29,26 @@ function nowEntry(role: TranscriptEntry["role"], content: string): TranscriptEnt
 function formatTime(value: Date): string {
   const hh = String(value.getHours()).padStart(2, "0");
   const mm = String(value.getMinutes()).padStart(2, "0");
-  const ss = String(value.getSeconds()).padStart(2, "0");
-  return `${hh}:${mm}:${ss}`;
+  return `${hh}:${mm}`;
 }
 
-function formatSessionLabel(session: SessionInfo): string {
+function sessionShortId(sessionId: string): string {
+  return sessionId.slice(0, 8);
+}
+
+function formatSessionTitle(session: SessionInfo | null): string {
+  if (!session) {
+    return "No Session";
+  }
+
   if (!session.createdAt) {
-    return session.sessionId;
+    return `Session #${sessionShortId(session.sessionId)}`;
   }
 
   const d = session.createdAt;
-  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-  return `${session.sessionId} [${date} ${time}]`;
+  return `Session #${sessionShortId(session.sessionId)} · ${String(d.getHours()).padStart(2, "0")}:${String(
+    d.getMinutes()
+  ).padStart(2, "0")}`;
 }
 
 function errorText(err: unknown): string {
@@ -153,10 +122,17 @@ function schemaSignature(schema: ActionParamSchema | null): string {
   }
 }
 
+function isAssistantTimelineType(type: string): boolean {
+  const normalized = type.trim().toLowerCase().replace(/[\s_-]/g, "");
+  return normalized.startsWith("assistant");
+}
+
 export function App(): JSX.Element {
-  const [baseUrl, setBaseUrl] = useState("http://localhost:5228");
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+
   const [apps, setApps] = useState<AppInfo[]>(EMPTY_APPS);
   const [windows, setWindows] = useState<WindowInfo[]>(EMPTY_WINDOWS);
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
@@ -174,22 +150,29 @@ export function App(): JSX.Element {
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
 
   const [includeObsolete, setIncludeObsolete] = useState(true);
-  const [inspectorTab, setInspectorTab] = useState<"context" | "llm" | "windows">("windows");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("windows");
   const [busy, setBusy] = useState(false);
   const [interacting, setInteracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const [actionParamPayload, setActionParamPayload] = useState<Record<string, string>>({});
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pollTimerRef = useRef<number | null>(null);
   const seenAssistantSeqRef = useRef<Set<number>>(new Set());
 
-  const selectedWindow = useMemo(() => windows.find((window) => window.id === selectedActionWindowId) ?? null, [selectedActionWindowId, windows]);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.sessionId === selectedSessionId) ?? null,
+    [selectedSessionId, sessions]
+  );
+
+  const selectedWindow = useMemo(
+    () => windows.find((window) => window.id === selectedActionWindowId) ?? null,
+    [selectedActionWindowId, windows]
+  );
 
   const selectedAction = useMemo(
     () => selectedWindow?.actions.find((action) => action.id === selectedActionId) ?? null,
-    [selectedActionId, selectedWindow],
+    [selectedActionId, selectedWindow]
   );
 
   useEffect(() => {
@@ -201,7 +184,7 @@ export function App(): JSX.Element {
 
   useEffect(() => {
     if (!transcriptRef.current) return;
-    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight + 64;
+    transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight + 80;
   }, [entries, busy, interacting]);
 
   useEffect(() => {
@@ -214,7 +197,9 @@ export function App(): JSX.Element {
   }, []);
 
   async function runGuarded(action: () => Promise<void>): Promise<void> {
-    if (busy) return;
+    if (busy || interacting) {
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -225,6 +210,27 @@ export function App(): JSX.Element {
     } finally {
       setBusy(false);
     }
+  }
+
+  function getDefaultAgentId(session: SessionInfo | null): string | null {
+    if (!session || session.agents.length === 0) {
+      return null;
+    }
+    return session.agents[0]?.agentId ?? null;
+  }
+
+  function actionParamKey(windowId: string, actionId: string): string {
+    return `${windowId}::${actionId}`;
+  }
+
+  function prepareParamEditor(window: WindowInfo, action: WindowAction): void {
+    const key = actionParamKey(window.id, action.id);
+    if (key in actionParamPayload) {
+      return;
+    }
+
+    const defaultPayload = buildDefaultPayloadFromSchema(action.paramSchema);
+    setActionParamPayload((prev) => ({ ...prev, [key]: formatJson(defaultPayload) }));
   }
 
   function syncSimulatorSelections(nextApps: AppInfo[], nextWindows: WindowInfo[]): void {
@@ -257,23 +263,6 @@ export function App(): JSX.Element {
     }
   }
 
-  function actionParamKey(windowId: string, actionId: string): string {
-    return `${windowId}::${actionId}`;
-  }
-
-  function prepareParamEditor(window: WindowInfo, action: WindowAction): void {
-    const key = actionParamKey(window.id, action.id);
-    if (key in actionParamPayload) {
-      return;
-    }
-
-    const defaultPayload = buildDefaultPayloadFromSchema(action.paramSchema);
-    setActionParamPayload((prev) => ({
-      ...prev,
-      [key]: formatJson(defaultPayload)
-    }));
-  }
-
   function collectActionParams(window: WindowInfo, action: WindowAction): unknown {
     const key = actionParamKey(window.id, action.id);
     const raw = (actionParamPayload[key] ?? "").trim();
@@ -292,6 +281,126 @@ export function App(): JSX.Element {
     }
   }
 
+  async function loadSessionAgentState(
+    sessionId: string,
+    agentId: string,
+    includeObsoleteValue = includeObsolete
+  ): Promise<void> {
+    const [nextWindows, nextApps, nextRawContext, nextRawLlmInput] = await Promise.all([
+      ACIApi.getWindows(baseUrl, sessionId, agentId),
+      ACIApi.getApps(baseUrl, sessionId, agentId),
+      ACIApi.getRawContext(baseUrl, sessionId, agentId, includeObsoleteValue),
+      ACIApi.getRawLlmInput(baseUrl, sessionId, agentId)
+    ]);
+
+    setWindows(nextWindows);
+    setApps(nextApps);
+    setRawContext(nextRawContext);
+    setRawLlmInput(nextRawLlmInput);
+    syncSimulatorSelections(nextApps, nextWindows);
+  }
+
+  async function reloadSessionCatalog(autoCreateIfEmpty = false): Promise<void> {
+    let nextSessions = await ACIApi.getSessions(baseUrl);
+    let nextSelectedSessionId = selectedSessionId;
+    let nextSelectedAgentId = selectedAgentId;
+
+    if (nextSessions.length === 0 && autoCreateIfEmpty) {
+      const created = await ACIApi.createSession(baseUrl);
+      nextSessions = [created];
+      nextSelectedSessionId = created.sessionId;
+      nextSelectedAgentId = getDefaultAgentId(created);
+      setEntries((prev) => [...prev, nowEntry("system", `Auto-created session ${created.sessionId}`)]);
+    }
+
+    if (!nextSelectedSessionId || !nextSessions.some((session) => session.sessionId === nextSelectedSessionId)) {
+      nextSelectedSessionId = nextSessions[0]?.sessionId ?? null;
+    }
+
+    const nextSession = nextSessions.find((session) => session.sessionId === nextSelectedSessionId) ?? null;
+    if (!nextSelectedAgentId || !nextSession?.agents.some((agent) => agent.agentId === nextSelectedAgentId)) {
+      nextSelectedAgentId = getDefaultAgentId(nextSession);
+    }
+
+    setSessions(nextSessions);
+    setSelectedSessionId(nextSelectedSessionId);
+    setSelectedAgentId(nextSelectedAgentId);
+
+    if (nextSelectedSessionId && nextSelectedAgentId) {
+      await loadSessionAgentState(nextSelectedSessionId, nextSelectedAgentId);
+      return;
+    }
+
+    setApps(EMPTY_APPS);
+    setWindows(EMPTY_WINDOWS);
+    setRawContext("");
+    setRawLlmInput("");
+  }
+
+  async function ensureSessionReady(): Promise<{ sessionId: string; agentId: string } | null> {
+    if (selectedSessionId && selectedAgentId) {
+      return { sessionId: selectedSessionId, agentId: selectedAgentId };
+    }
+
+    let nextSession = activeSession;
+    if (!nextSession) {
+      const created = await ACIApi.createSession(baseUrl);
+      setEntries((prev) => [...prev, nowEntry("system", `Auto-created session ${created.sessionId}`)]);
+      await reloadSessionCatalog();
+      nextSession = created;
+    }
+
+    const agentId = selectedAgentId ?? getDefaultAgentId(nextSession);
+    if (!nextSession || !agentId) {
+      return null;
+    }
+
+    setSelectedSessionId(nextSession.sessionId);
+    setSelectedAgentId(agentId);
+    return { sessionId: nextSession.sessionId, agentId };
+  }
+
+  async function createSession(): Promise<void> {
+    await runGuarded(async () => {
+      const created = await ACIApi.createSession(baseUrl);
+      const agentId = getDefaultAgentId(created);
+      setEntries((prev) => [...prev, nowEntry("system", `Created session ${created.sessionId}`)]);
+
+      await reloadSessionCatalog();
+      if (agentId) {
+        setSelectedSessionId(created.sessionId);
+        setSelectedAgentId(agentId);
+        await loadSessionAgentState(created.sessionId, agentId);
+      }
+    });
+  }
+
+  async function deleteCurrentSession(): Promise<void> {
+    if (!selectedSessionId) {
+      return;
+    }
+
+    await runGuarded(async () => {
+      await ACIApi.closeSession(baseUrl, selectedSessionId);
+      setEntries((prev) => [...prev, nowEntry("system", `Closed session ${selectedSessionId}`)]);
+      setSelectedSessionId(null);
+      setSelectedAgentId(null);
+      await reloadSessionCatalog();
+    });
+  }
+
+  async function refreshCurrent(): Promise<void> {
+    await runGuarded(async () => {
+      if (!selectedSessionId || !selectedAgentId) {
+        await reloadSessionCatalog(true);
+        return;
+      }
+
+      await reloadSessionCatalog();
+      await loadSessionAgentState(selectedSessionId, selectedAgentId);
+    });
+  }
+
   function applyInteractionResult(result: InteractionResponse, options?: { skipResponse?: boolean }): void {
     if (!result.success) {
       setEntries((prev) => [...prev, nowEntry("system", `Request failed: ${result.error ?? "unknown"}`)]);
@@ -304,25 +413,21 @@ export function App(): JSX.Element {
     }
     if (result.action) {
       lines.push(
-        `[action] type=${result.action.type}, app=${result.action.appName}, window=${result.action.windowId}, actionId=${result.action.actionId}`,
+        `[action] type=${result.action.type}, app=${result.action.appName}, window=${result.action.windowId}, actionId=${result.action.actionId}`
       );
     }
     if (result.actionResult) {
       lines.push(
-        `[actionResult] success=${result.actionResult.success}, message=${result.actionResult.message ?? ""}, summary=${result.actionResult.summary ?? ""}`,
+        `[actionResult] success=${result.actionResult.success}, message=${result.actionResult.message ?? ""}, summary=${result.actionResult.summary ?? ""}`
       );
     }
     if (result.steps && result.steps.length > 0) {
       for (const step of result.steps) {
         lines.push(
-          `[step] call=${step.callId}, turn=${step.turn}, idx=${step.index}, mode=${step.resolvedMode}, target=${step.windowId}.${step.actionId}, success=${step.success}, task=${step.taskId ?? ""}`,
+          `[step] call=${step.callId}, turn=${step.turn}, idx=${step.index}, mode=${step.resolvedMode}, target=${step.windowId}.${step.actionId}, success=${step.success}, task=${step.taskId ?? ""}`
         );
-        if (step.message) {
-          lines.push(`  message: ${step.message}`);
-        }
-        if (step.summary) {
-          lines.push(`  summary: ${step.summary}`);
-        }
+        if (step.message) lines.push(`  message: ${step.message}`);
+        if (step.summary) lines.push(`  summary: ${step.summary}`);
       }
     }
     if (result.usage) {
@@ -341,28 +446,19 @@ export function App(): JSX.Element {
     }
   }
 
-  function isAssistantTimelineType(type: string): boolean {
-    const normalized = type
-      .trim()
-      .toLowerCase()
-      .replace(/[\s_-]/g, "");
-    return normalized.startsWith("assistant");
-  }
-
-  async function initAssistantTracking(sessionId: string): Promise<void> {
-    const timeline = await ACIApi.getContextTimeline(baseUrl, sessionId, true);
+  async function initAssistantTracking(sessionId: string, agentId: string): Promise<void> {
+    const timeline = await ACIApi.getContextTimeline(baseUrl, sessionId, agentId, true);
     const seen = new Set<number>();
-
     for (const item of timeline) {
-      if (!isAssistantTimelineType(item.type)) continue;
-      seen.add(item.seq);
+      if (isAssistantTimelineType(item.type)) {
+        seen.add(item.seq);
+      }
     }
-
     seenAssistantSeqRef.current = seen;
   }
 
-  async function pullAssistantDeltas(sessionId: string): Promise<number> {
-    const timeline = await ACIApi.getContextTimeline(baseUrl, sessionId, true);
+  async function pullAssistantDeltas(sessionId: string, agentId: string): Promise<number> {
+    const timeline = await ACIApi.getContextTimeline(baseUrl, sessionId, agentId, true);
     const items = timeline
       .filter((item) => isAssistantTimelineType(item.type) && !seenAssistantSeqRef.current.has(item.seq))
       .sort((left, right) => left.seq - right.seq);
@@ -375,141 +471,53 @@ export function App(): JSX.Element {
     for (const item of items) {
       seenAssistantSeqRef.current.add(item.seq);
     }
-
     return items.length;
   }
 
-  async function loadSessionState(sessionId: string, includeObsoleteValue = includeObsolete): Promise<void> {
-    const [nextWindows, nextApps, nextRawContext, nextRawLlmInput] = await Promise.all([
-      ACIApi.getWindows(baseUrl, sessionId),
-      ACIApi.getApps(baseUrl, sessionId),
-      ACIApi.getRawContext(baseUrl, sessionId, includeObsoleteValue),
-      ACIApi.getRawLlmInput(baseUrl, sessionId),
-    ]);
-
-    setWindows(nextWindows);
-    setApps(nextApps);
-    setRawContext(nextRawContext);
-    setRawLlmInput(nextRawLlmInput);
-    syncSimulatorSelections(nextApps, nextWindows);
-  }
-
-  async function ensureSessionReady(): Promise<string | null> {
-    if (selectedSessionId && selectedSessionId.length > 0) {
-      return selectedSessionId;
-    }
-
-    const created = await ACIApi.createSession(baseUrl);
-    setSelectedSessionId(created.sessionId);
-    setEntries((prev) => [...prev, nowEntry("system", `Auto-created session ${created.sessionId}`)]);
-
-    await reloadSessionCatalog();
-    return created.sessionId;
-  }
-
-  async function reloadSessionCatalog(autoCreateIfEmpty = false): Promise<void> {
-    let nextSessions = await ACIApi.getSessions(baseUrl);
-    let nextSelected = selectedSessionId;
-
-    if (nextSessions.length === 0 && autoCreateIfEmpty) {
-      const created = await ACIApi.createSession(baseUrl);
-      nextSessions = [created];
-      nextSelected = created.sessionId;
-      setEntries((prev) => [...prev, nowEntry("system", `Auto-created session ${created.sessionId}`)]);
-    }
-
-    if (!nextSelected || !nextSessions.some((session) => session.sessionId === nextSelected)) {
-      nextSelected = nextSessions[0]?.sessionId ?? null;
-    }
-
-    setSessions(nextSessions);
-    setSelectedSessionId(nextSelected);
-
-    if (nextSelected) {
-      await loadSessionState(nextSelected);
-    } else {
-      setApps(EMPTY_APPS);
-      setWindows(EMPTY_WINDOWS);
-      setRawContext("");
-      setRawLlmInput("");
-    }
-  }
-
-  async function createSession(): Promise<void> {
-    await runGuarded(async () => {
-      const created = await ACIApi.createSession(baseUrl);
-      setEntries((prev) => [...prev, nowEntry("system", `Created session ${created.sessionId}`)]);
-      setSelectedSessionId(created.sessionId);
-      await reloadSessionCatalog();
-      await loadSessionState(created.sessionId);
-    });
-  }
-
-  async function deleteCurrentSession(): Promise<void> {
-    const sessionId = selectedSessionId;
-    if (!sessionId) return;
-
-    await runGuarded(async () => {
-      await ACIApi.closeSession(baseUrl, sessionId);
-      setEntries((prev) => [...prev, nowEntry("system", `Closed session ${sessionId}`)]);
-      setSelectedSessionId(null);
-      await reloadSessionCatalog();
-    });
-  }
-
-  async function refreshCurrentSession(): Promise<void> {
-    await runGuarded(async () => {
-      if (!selectedSessionId) {
-        await reloadSessionCatalog(true);
-        return;
-      }
-      await loadSessionState(selectedSessionId);
-    });
-  }
-
   async function sendComposer(): Promise<void> {
+    const context = await ensureSessionReady();
+    if (!context) {
+      setError("No active agent.");
+      return;
+    }
+
+    const { sessionId, agentId } = context;
+
     if (composerMode !== "llm") {
       await runGuarded(async () => {
-        const sessionId = await ensureSessionReady();
-        if (!sessionId) return;
-
         const content = manualOutputInput.trim();
-        if (content.length === 0) {
-          throw new Error("Assistant output cannot be empty");
+        if (!content) {
+          throw new Error("Assistant output cannot be empty.");
         }
 
         setEntries((prev) => [...prev, nowEntry("simulator", content)]);
-        const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, content);
+        const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, agentId, content);
         applyInteractionResult(result);
-        await loadSessionState(sessionId);
+        await loadSessionAgentState(sessionId, agentId);
       });
       return;
     }
 
-    if (interacting) return;
-
-    setError(null);
-    const content = composerInput.trim();
-    if (content.length === 0) {
-      setError("Message cannot be empty");
+    if (interacting) {
       return;
     }
 
-    let sessionId: string | null = null;
-    try {
-      sessionId = await ensureSessionReady();
-      if (!sessionId) return;
+    const content = composerInput.trim();
+    if (!content) {
+      setError("Message cannot be empty.");
+      return;
+    }
 
+    try {
       setInteracting(true);
+      setError(null);
       setComposerInput("");
       setEntries((prev) => [...prev, nowEntry("user", content)]);
+      await initAssistantTracking(sessionId, agentId);
 
-      await initAssistantTracking(sessionId);
-
-      const activeSessionId = sessionId;
       let hasLiveAssistantOutput = false;
       const poll = async () => {
-        const deltaCount = await pullAssistantDeltas(activeSessionId);
+        const deltaCount = await pullAssistantDeltas(sessionId, agentId);
         if (deltaCount > 0) {
           hasLiveAssistantOutput = true;
         }
@@ -518,20 +526,22 @@ export function App(): JSX.Element {
       stopInteractionPolling();
       pollTimerRef.current = window.setInterval(() => {
         void poll().catch(() => {
-          // Keep loop resilient; final request result still determines success/failure.
+          // Keep polling resilient.
         });
       }, 700);
 
-      const result = await ACIApi.interact(baseUrl, activeSessionId, content);
-      const finalDeltaCount = await pullAssistantDeltas(activeSessionId);
+      const result = await ACIApi.interact(baseUrl, sessionId, agentId, content);
+      const finalDeltaCount = await pullAssistantDeltas(sessionId, agentId);
       if (finalDeltaCount > 0) {
         hasLiveAssistantOutput = true;
       }
+
       applyInteractionResult(result, { skipResponse: hasLiveAssistantOutput });
-      await loadSessionState(activeSessionId);
+      await loadSessionAgentState(sessionId, agentId);
     } catch (err) {
-      setError(errorText(err));
-      setEntries((prev) => [...prev, nowEntry("system", `Request failed: ${errorText(err)}`)]);
+      const message = errorText(err);
+      setError(message);
+      setEntries((prev) => [...prev, nowEntry("system", `Request failed: ${message}`)]);
     } finally {
       stopInteractionPolling();
       setInteracting(false);
@@ -539,27 +549,28 @@ export function App(): JSX.Element {
   }
 
   async function simulateToolCall(calls: Array<Record<string, unknown>>): Promise<void> {
-    const sessionId = await ensureSessionReady();
-    if (!sessionId) return;
+    const context = await ensureSessionReady();
+    if (!context) {
+      throw new Error("No active agent.");
+    }
 
-    // Simulated assistant output follows backend parser format directly.
+    const { sessionId, agentId } = context;
     const assistantOutput = `<tool_call>\n${JSON.stringify({ calls }, null, 2)}\n</tool_call>`;
     setEntries((prev) => [...prev, nowEntry("simulator", assistantOutput)]);
-    const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, assistantOutput);
+    const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, agentId, assistantOutput);
     applyInteractionResult(result);
-    await loadSessionState(sessionId);
+    await loadSessionAgentState(sessionId, agentId);
   }
 
   async function simulateCreateToolCall(): Promise<void> {
     await runGuarded(async () => {
-      if (!selectedCreateApp || selectedCreateApp.trim().length === 0) {
-        throw new Error("Select an app first");
+      if (!selectedCreateApp) {
+        throw new Error("Select an app first.");
       }
 
-      // In the new protocol, opening an app is an action on launcher.
       const params: Record<string, unknown> = { app: selectedCreateApp };
       const target = createTarget.trim();
-      if (target.length > 0) {
+      if (target) {
         params.target = target;
       }
 
@@ -567,8 +578,8 @@ export function App(): JSX.Element {
         {
           window_id: "launcher",
           action_id: "open",
-          params,
-        },
+          params
+        }
       ]);
     });
   }
@@ -576,42 +587,44 @@ export function App(): JSX.Element {
   async function simulateActionToolCall(): Promise<void> {
     await runGuarded(async () => {
       if (!selectedWindow || !selectedAction) {
-        throw new Error("Select a window and action first");
+        throw new Error("Select a window and action first.");
       }
 
       const params = collectActionParams(selectedWindow, selectedAction);
-      // Unified action-only tool_call payload.
       await simulateToolCall([
         {
           window_id: selectedWindow.id,
           action_id: selectedAction.id,
-          params,
-        },
+          params
+        }
       ]);
     });
   }
 
   async function invokeActionDirectly(): Promise<void> {
     await runGuarded(async () => {
-      const sessionId = await ensureSessionReady();
-      if (!sessionId) return;
-
-      if (!selectedWindow || !selectedAction) {
-        throw new Error("Select a window and action first");
+      const context = await ensureSessionReady();
+      if (!context) {
+        throw new Error("No active agent.");
       }
 
+      if (!selectedWindow || !selectedAction) {
+        throw new Error("Select a window and action first.");
+      }
+
+      const { sessionId, agentId } = context;
       const params = collectActionParams(selectedWindow, selectedAction);
-      const result = await ACIApi.runWindowAction(baseUrl, sessionId, selectedWindow.id, selectedAction.id, params);
+      const result = await ACIApi.runWindowAction(baseUrl, sessionId, agentId, selectedWindow.id, selectedAction.id, params);
 
       setEntries((prev) => [
         ...prev,
         nowEntry(
           "system",
-          `Direct invoke ${selectedWindow.id}.${selectedAction.id}: success=${result.success}, message=${result.message ?? ""}, summary=${result.summary ?? ""}`,
-        ),
+          `Direct invoke ${selectedWindow.id}.${selectedAction.id}: success=${result.success}, message=${result.message ?? ""}, summary=${result.summary ?? ""}`
+        )
       ]);
 
-      await loadSessionState(sessionId);
+      await loadSessionAgentState(sessionId, agentId);
     });
   }
 
@@ -620,6 +633,7 @@ export function App(): JSX.Element {
     const window = windows.find((item) => item.id === windowId) ?? null;
     const nextAction = window?.actions[0]?.id ?? null;
     setSelectedActionId(nextAction);
+
     if (window && nextAction) {
       const action = window.actions.find((item) => item.id === nextAction);
       if (action) {
@@ -645,9 +659,10 @@ export function App(): JSX.Element {
 
     const key = actionParamKey(selectedWindow.id, selectedAction.id);
     const value = actionParamPayload[key] ?? formatJson(buildDefaultPayloadFromSchema(selectedAction.paramSchema));
+
     return (
       <textarea
-        className="input textarea mono"
+        className="aci-input aci-textarea aci-mono"
         disabled={busy || interacting}
         value={value}
         onChange={(event) => {
@@ -659,341 +674,322 @@ export function App(): JSX.Element {
     );
   }
 
-  return (
-    <div className="app">
-      <header className="topbar">
-        <div className="topbar-title">
-          <h1>Aperture Debug Workbench</h1>
-          <p>ACI Electron Interface</p>
-        </div>
-        <button className="button secondary" disabled={busy || interacting} onClick={() => void refreshCurrentSession()}>
-          <Icons.Refresh />
-          Refresh
-        </button>
-      </header>
+  async function selectSessionAgent(sessionId: string, agentId: string): Promise<void> {
+    await runGuarded(async () => {
+      setSelectedSessionId(sessionId);
+      setSelectedAgentId(agentId);
+      await loadSessionAgentState(sessionId, agentId);
+    });
+  }
 
-      <section className="connection">
-        <div className="connection-row">
-          <div className="field">
-            <label>Server URL</label>
-            <input
-              className="input"
-              disabled={busy || interacting}
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              placeholder="http://localhost:5228"
-            />
+  return (
+    <div className="aci-app">
+      <aside className="aci-sidebar">
+        <div className="aci-brand">
+          <div className="aci-brand-dot" />
+          <div>
+            <div className="aci-brand-title">Aperture</div>
+            <div className="aci-brand-sub">ACI Workbench</div>
           </div>
-          <div className="field">
-            <label>Session</label>
-            <select
-              className="input"
+        </div>
+
+        <button className="aci-button aci-button-primary aci-full" disabled={busy || interacting} onClick={() => void createSession()}>
+          + New Session
+        </button>
+
+        <div className="aci-sidebar-label">Sessions</div>
+        <div className="aci-session-list">
+          {sessions.length === 0 && <div className="aci-empty">No session found.</div>}
+          {sessions.map((session) => (
+            <div key={session.sessionId} className={`aci-session-card ${session.sessionId === selectedSessionId ? "is-active" : ""}`}>
+              <button
+                className="aci-session-head"
+                disabled={busy || interacting || session.agents.length === 0}
+                onClick={() => {
+                  const fallbackAgentId = session.agents[0]?.agentId ?? null;
+                  if (fallbackAgentId) {
+                    void selectSessionAgent(session.sessionId, fallbackAgentId);
+                  }
+                }}
+              >
+                <span>{formatSessionTitle(session)}</span>
+                <span>{session.agentCount} agents</span>
+              </button>
+              <div className="aci-agent-list">
+                {session.agents.map((agent) => (
+                  <button
+                    key={agent.agentId}
+                    className={`aci-agent-item ${
+                      session.sessionId === selectedSessionId && agent.agentId === selectedAgentId ? "is-active" : ""
+                    }`}
+                    disabled={busy || interacting}
+                    onClick={() => void selectSessionAgent(session.sessionId, agent.agentId)}
+                  >
+                    <span>{agent.name ?? agent.agentId}</span>
+                    <small>{agent.role ?? "agent"}</small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="aci-sidebar-foot">
+          <button className="aci-button aci-button-ghost aci-full" disabled={busy || interacting} onClick={() => void refreshCurrent()}>
+            Refresh
+          </button>
+          <button
+            className="aci-button aci-button-danger aci-full"
+            disabled={busy || interacting || !selectedSessionId}
+            onClick={() => void deleteCurrentSession()}
+          >
+            Close Session
+          </button>
+        </div>
+      </aside>
+
+      <section className="aci-center">
+        <header className="aci-center-header">
+          <div className="aci-breadcrumb">
+            <span>{activeSession ? `Session #${sessionShortId(activeSession.sessionId)}` : "No Session"}</span>
+            <span>/</span>
+            <span>{selectedAgentId ?? "No Agent"}</span>
+          </div>
+          <div className="aci-compact-actions">
+            <button className="aci-icon-button" disabled={busy || interacting} onClick={() => void refreshCurrent()}>
+              ↻
+            </button>
+          </div>
+        </header>
+
+        <div className="aci-system-banner">
+          System initialized. Active endpoint: <strong>{baseUrl}</strong>
+        </div>
+
+        {error && <div className="aci-error-banner">Request failed: {error}</div>}
+
+        <div className="aci-transcript" ref={transcriptRef}>
+          {entries.length === 0 && <div className="aci-empty">Start by sending a message.</div>}
+          {entries.map((entry, index) => (
+            <article key={`${entry.time.toISOString()}-${index}`} className={`aci-entry role-${entry.role}`}>
+              <header>
+                <span>{entry.role.toUpperCase()}</span>
+                <span>{formatTime(entry.time)}</span>
+              </header>
+              <pre>{entry.content}</pre>
+            </article>
+          ))}
+        </div>
+
+        <footer className="aci-composer">
+          <div className="aci-chip-row">
+            <button
+              className={`aci-chip ${composerMode === "llm" ? "is-active" : ""}`}
               disabled={busy || interacting}
-              value={selectedSessionId ?? ""}
+              onClick={() => setComposerMode("llm")}
+            >
+              LLM
+            </button>
+            <button
+              className={`aci-chip ${composerMode === "simulatedAssistant" ? "is-active" : ""}`}
+              disabled={busy || interacting}
+              onClick={() => setComposerMode("simulatedAssistant")}
+            >
+              Simulated
+            </button>
+          </div>
+
+          {composerMode === "llm" ? (
+            <textarea
+              className="aci-input aci-textarea"
+              disabled={busy || interacting}
+              value={composerInput}
+              onChange={(event) => setComposerInput(event.target.value)}
+              placeholder="Type a message..."
+            />
+          ) : (
+            <textarea
+              className="aci-input aci-textarea aci-mono"
+              disabled={busy || interacting}
+              value={manualOutputInput}
+              onChange={(event) => setManualOutputInput(event.target.value)}
+              placeholder="<tool_call>...</tool_call>"
+            />
+          )}
+
+          <button
+            className="aci-button aci-button-primary"
+            disabled={busy || interacting || (composerMode === "llm" ? !composerInput.trim() : !manualOutputInput.trim())}
+            onClick={() => void sendComposer()}
+          >
+            {interacting ? "Running Loop..." : "Send"}
+          </button>
+        </footer>
+      </section>
+
+      <aside className="aci-debug">
+        <header className="aci-debug-header">Debug Console</header>
+
+        <section className="aci-debug-section">
+          <div className="aci-section-title">Connection</div>
+          <label className="aci-field-label">Server URL</label>
+          <input
+            className="aci-input"
+            disabled={busy || interacting}
+            value={baseUrl}
+            onChange={(event) => setBaseUrl(event.target.value)}
+            placeholder={DEFAULT_BASE_URL}
+          />
+          <label className="aci-checkbox">
+            <input
+              type="checkbox"
+              checked={includeObsolete}
+              disabled={busy || interacting}
               onChange={(event) => {
-                const value = event.target.value;
-                setSelectedSessionId(value.length === 0 ? null : value);
-                if (value.length > 0) {
+                const checked = event.target.checked;
+                setIncludeObsolete(checked);
+                if (selectedSessionId && selectedAgentId) {
                   void runGuarded(async () => {
-                    await loadSessionState(value);
+                    await loadSessionAgentState(selectedSessionId, selectedAgentId, checked);
                   });
                 }
               }}
-            >
-              {sessions.length === 0 && <option value="">No session</option>}
-              {sessions.map((session) => (
-                <option key={session.sessionId} value={session.sessionId}>
-                  {formatSessionLabel(session)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="connection-actions">
-            <button className="button secondary" disabled={busy || interacting} onClick={() => void runGuarded(() => reloadSessionCatalog(true))}>
-              <Icons.Terminal />
-              Reload
-            </button>
-            <button className="button" disabled={busy || interacting} onClick={() => void createSession()}>
-              <Icons.Plus />
-              New
-            </button>
-            <button className="button danger" disabled={busy || interacting || !selectedSessionId} onClick={() => void deleteCurrentSession()}>
-              <Icons.Trash />
-              Close
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {error && (
-        <section className="error-banner">
-          <strong>Error:</strong> {error}
+            />
+            Include obsolete context
+          </label>
         </section>
-      )}
 
-      <main className="panels">
-        {/* PANEL 1: CHAT */}
-        <section className="panel">
-          <div className="panel-title">
-            <Icons.Send />
-            Interaction
-          </div>
-          <div className="transcript" ref={transcriptRef}>
-            {entries.length === 0 && <div className="empty">No activity recorded for this session.</div>}
-            {entries.map((entry, index) => (
-              <div className={`entry role-${entry.role}`} key={`${entry.time.toISOString()}-${index}`}>
-                <div className="entry-meta">
-                  <span>{entry.role}</span>
-                  <span>{formatTime(entry.time)}</span>
-                </div>
-                <pre>{entry.content}</pre>
-              </div>
-            ))}
-          </div>
-
-          <div className="composer">
-            <div className="mode-row">
-              <button
-                className={`chip ${composerMode === "llm" ? "chip-active" : ""}`}
-                disabled={busy || interacting}
-                onClick={() => setComposerMode("llm")}
-              >
-                LLM
-              </button>
-              <button
-                className={`chip ${composerMode === "simulatedAssistant" ? "chip-active" : ""}`}
-                disabled={busy || interacting}
-                onClick={() => setComposerMode("simulatedAssistant")}
-              >
-                Simulated AI
-              </button>
-            </div>
-
-            {composerMode === "llm" ? (
-              <textarea
-                className="input textarea"
-                disabled={busy || interacting}
-                value={composerInput}
-                onChange={(event) => setComposerInput(event.target.value)}
-                placeholder="Send a message to the AI..."
-              />
-            ) : (
-              <textarea
-                className="input textarea mono"
-                disabled={busy || interacting}
-                value={manualOutputInput}
-                onChange={(event) => setManualOutputInput(event.target.value)}
-                placeholder="<tool_call>...</tool_call>"
-              />
-            )}
+        <section className="aci-debug-section">
+          <div className="aci-section-title">Simulator</div>
+          <div className="aci-chip-row">
             <button
-              className="button"
-              disabled={busy || interacting || (composerMode === "llm" ? !composerInput.trim() : !manualOutputInput.trim())}
-              onClick={() => void sendComposer()}
+              className={`aci-chip ${simulatorMode === "create" ? "is-active" : ""}`}
+              disabled={busy || interacting}
+              onClick={() => setSimulatorMode("create")}
             >
-              <Icons.Send />
-              {interacting ? "Running Loop..." : "Execute"}
+              Open App
+            </button>
+            <button
+              className={`aci-chip ${simulatorMode === "action" ? "is-active" : ""}`}
+              disabled={busy || interacting}
+              onClick={() => setSimulatorMode("action")}
+            >
+              Action
             </button>
           </div>
+
+          {simulatorMode === "create" ? (
+            <>
+              <label className="aci-field-label">Application</label>
+              <select
+                className="aci-input"
+                disabled={busy || interacting}
+                value={selectedCreateApp ?? ""}
+                onChange={(event) => setSelectedCreateApp(event.target.value)}
+              >
+                {apps.length === 0 && <option value="">No app</option>}
+                {apps.map((app) => (
+                  <option key={app.name} value={app.name}>
+                    {app.name} {app.isStarted ? "(started)" : ""}
+                  </option>
+                ))}
+              </select>
+
+              <label className="aci-field-label">Target (optional)</label>
+              <input
+                className="aci-input"
+                disabled={busy || interacting}
+                value={createTarget}
+                onChange={(event) => setCreateTarget(event.target.value)}
+                placeholder="e.g. docs"
+              />
+
+              <button className="aci-button aci-button-primary" disabled={busy || interacting || !selectedCreateApp} onClick={() => void simulateCreateToolCall()}>
+                Simulate Open
+              </button>
+            </>
+          ) : (
+            <>
+              <label className="aci-field-label">Window</label>
+              <select
+                className="aci-input"
+                disabled={busy || interacting}
+                value={selectedActionWindowId ?? ""}
+                onChange={(event) => onSelectActionWindow(event.target.value)}
+              >
+                {windows.length === 0 && <option value="">No window</option>}
+                {windows.map((window) => (
+                  <option key={window.id} value={window.id}>
+                    {window.id}
+                  </option>
+                ))}
+              </select>
+
+              <label className="aci-field-label">Action</label>
+              <select
+                className="aci-input"
+                disabled={busy || interacting || !selectedWindow}
+                value={selectedActionId ?? ""}
+                onChange={(event) => onSelectAction(event.target.value)}
+              >
+                {!selectedWindow && <option value="">Select window</option>}
+                {selectedWindow?.actions.map((action) => (
+                  <option key={action.id} value={action.id}>
+                    {action.label} ({action.id})
+                  </option>
+                ))}
+              </select>
+
+              {selectedAction && (
+                <>
+                  <label className="aci-field-label">Params JSON</label>
+                  {renderActionPayloadEditor()}
+                  <div className="aci-hint">Schema: {schemaSignature(selectedAction.paramSchema)}</div>
+                  <div className="aci-inline-buttons">
+                    <button className="aci-button aci-button-primary" disabled={busy || interacting} onClick={() => void simulateActionToolCall()}>
+                      Simulate
+                    </button>
+                    <button className="aci-button aci-button-ghost" disabled={busy || interacting} onClick={() => void invokeActionDirectly()}>
+                      Direct
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </section>
 
-        {/* PANEL 2: SIMULATOR */}
-        <section className="panel">
-          <div className="panel-title">
-            <Icons.Zap />
-            Simulator
-          </div>
-          <div className="stack">
-            <div className="mode-row">
-              <button
-                className={`chip ${simulatorMode === "create" ? "chip-active" : ""}`}
-                disabled={busy || interacting}
-                onClick={() => setSimulatorMode("create")}
-              >
-                Open App
-              </button>
-              <button
-                className={`chip ${simulatorMode === "action" ? "chip-active" : ""}`}
-                disabled={busy || interacting}
-                onClick={() => setSimulatorMode("action")}
-              >
-                Window Action
-              </button>
-            </div>
-
-            {simulatorMode === "create" ? (
-              <div className="stack" style={{ padding: 0 }}>
-                <div className="field">
-                  <label>Application</label>
-                  <select
-                    className="input"
-                    disabled={busy || interacting}
-                    value={selectedCreateApp ?? ""}
-                    onChange={(event) => setSelectedCreateApp(event.target.value)}
-                  >
-                    {apps.length === 0 && <option value="">No apps available</option>}
-                    {apps.map((app) => (
-                      <option key={app.name} value={app.name}>
-                        {app.name} {app.isStarted ? "- Active" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Target / Intent (optional)</label>
-                  <input
-                    className="input"
-                    disabled={busy || interacting}
-                    value={createTarget}
-                    onChange={(event) => setCreateTarget(event.target.value)}
-                    placeholder="e.g. 'open settings'"
-                  />
-                </div>
-                <button className="button" disabled={busy || interacting || !selectedCreateApp} onClick={() => void simulateCreateToolCall()}>
-                  Simulate Open
-                </button>
-              </div>
-            ) : (
-              <div className="stack" style={{ padding: 0 }}>
-                <div className="field">
-                  <label>Target Window</label>
-                  <select
-                    className="input"
-                    disabled={busy || interacting}
-                    value={selectedActionWindowId ?? ""}
-                    onChange={(event) => onSelectActionWindow(event.target.value)}
-                  >
-                    {windows.length === 0 && <option value="">No active windows</option>}
-                    {windows.map((window) => (
-                      <option key={window.id} value={window.id}>
-                        {window.id} ({window.appName ?? "unknown"})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label>Action</label>
-                  <select
-                    className="input"
-                    disabled={busy || interacting || !selectedWindow}
-                    value={selectedActionId ?? ""}
-                    onChange={(event) => onSelectAction(event.target.value)}
-                  >
-                    {!selectedWindow && <option value="">Select a window first</option>}
-                    {selectedWindow?.actions.map((action) => (
-                      <option key={action.id} value={action.id}>
-                        {action.label} ({action.id})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {selectedAction ? (
-                  <div className="stack" style={{ padding: 0 }}>
-                    <div className="field">
-                      <label>Action Params (JSON)</label>
-                      {renderActionPayloadEditor()}
-                      <div className="empty" style={{ padding: "10px", marginTop: "8px" }}>
-                        Schema: {schemaSignature(selectedAction.paramSchema)}
-                      </div>
-                    </div>
-                    <div className="row" style={{ marginTop: "8px" }}>
-                      <button className="button" style={{ flex: 1 }} disabled={busy || interacting} onClick={() => void simulateActionToolCall()}>
-                        Simulate Action
-                      </button>
-                      <button
-                        className="button secondary"
-                        style={{ flex: 1 }}
-                        disabled={busy || interacting}
-                        onClick={() => void invokeActionDirectly()}
-                      >
-                        Direct Invoke
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="empty" style={{ padding: "20px" }}>
-                    Select an action to continue.
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* PANEL 3: INSPECTOR */}
-        <section className="panel">
-          <div className="panel-title">
-            <Icons.Terminal />
-            System Inspector
-          </div>
-          <div className="mode-row" style={{ padding: "0 16px", marginTop: "12px" }}>
-            <button className={`chip ${inspectorTab === "context" ? "chip-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("context")}>
+        <section className="aci-debug-section aci-grow">
+          <div className="aci-section-title">Inspector</div>
+          <div className="aci-chip-row">
+            <button className={`aci-chip ${inspectorTab === "context" ? "is-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("context")}>
               Context
             </button>
-            <button className={`chip ${inspectorTab === "llm" ? "chip-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("llm")}>
-              LLM Input
+            <button className={`aci-chip ${inspectorTab === "llm" ? "is-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("llm")}>
+              LLM
             </button>
-            <button className={`chip ${inspectorTab === "windows" ? "chip-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("windows")}>
-              Windows ({windows.length})
+            <button className={`aci-chip ${inspectorTab === "windows" ? "is-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("windows")}>
+              Windows
             </button>
           </div>
 
-          <div className="inspector-content stack" style={{ marginTop: "8px" }}>
-            {inspectorTab === "context" && (
-              <div className="stack" style={{ padding: 0, flex: 1 }}>
-                <div className="field row" style={{ flexShrink: 0 }}>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={includeObsolete}
-                      disabled={busy || interacting}
-                      onChange={(event) => {
-                        const checked = event.target.checked;
-                        setIncludeObsolete(checked);
-                        if (selectedSessionId) {
-                          void runGuarded(async () => {
-                            await loadSessionState(selectedSessionId, checked);
-                          });
-                        }
-                      }}
-                    />
-                    Show Obsolete Context
-                  </label>
-                </div>
-                <pre className="block" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-                  {rawContext.trim().length > 0 ? rawContext : "Empty context"}
-                </pre>
-              </div>
-            )}
-
-            {inspectorTab === "llm" && (
-              <pre className="block" style={{ flex: 1, minHeight: 0, overflow: "auto", margin: 0 }}>
-                {rawLlmInput.trim().length > 0 ? rawLlmInput : "No input data"}
-              </pre>
-            )}
-
-            {inspectorTab === "windows" && (
-              <div className="stack" style={{ padding: 0, overflowY: "auto", flex: 1, minHeight: 0 }}>
-                {windows.length === 0 && <div className="empty">No windows found.</div>}
-                {windows.map((window) => (
-                  <details key={window.id}>
-                    <summary>
-                      {window.id} <span style={{ color: "var(--text-muted)", fontSize: "0.7rem" }}>- {window.appName}</span>
-                    </summary>
-                    <div className="block">
-                      <div style={{ marginBottom: "8px", color: "var(--accent)" }}>// content</div>
-                      {window.content}
-                    </div>
-                  </details>
-                ))}
-              </div>
-            )}
-          </div>
+          {inspectorTab === "context" && <pre className="aci-block">{rawContext || "Empty context."}</pre>}
+          {inspectorTab === "llm" && <pre className="aci-block">{rawLlmInput || "Empty llm input."}</pre>}
+          {inspectorTab === "windows" && (
+            <div className="aci-window-list">
+              {windows.length === 0 && <div className="aci-empty">No windows.</div>}
+              {windows.map((window) => (
+                <details key={window.id}>
+                  <summary>
+                    {window.id} <small>{window.appName ?? "unknown"}</small>
+                  </summary>
+                  <pre className="aci-block">{window.content}</pre>
+                </details>
+              ))}
+            </div>
+          )}
         </section>
-      </main>
+      </aside>
     </div>
   );
 }
-

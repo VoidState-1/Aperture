@@ -1,4 +1,5 @@
 import type {
+  AgentInfo,
   ActionInfo,
   ActionInvokeResponse,
   ActionParamKind,
@@ -247,25 +248,35 @@ function parseInteractionResponse(raw: unknown): InteractionResponse {
   };
 }
 
+function parseAgent(raw: unknown): AgentInfo {
+  const data = asRecord(raw);
+  return {
+    agentId: String(data.agentId ?? ""),
+    name: data.name == null ? null : String(data.name),
+    role: data.role == null ? null : String(data.role)
+  };
+}
+
+function parseSession(raw: unknown): SessionInfo {
+  const data = asRecord(raw);
+  const agents = asArray(data.agents).map(parseAgent);
+  return {
+    sessionId: String(data.sessionId ?? ""),
+    createdAt: toDate(data.createdAt),
+    agentCount: toInt(data.agentCount),
+    agents
+  };
+}
+
 export const ACIApi = {
   async createSession(baseUrl: string): Promise<SessionInfo> {
     const raw = await requestJson(baseUrl, "/api/sessions/", { method: "POST" });
-    const data = asRecord(raw);
-    return {
-      sessionId: String(data.sessionId ?? ""),
-      createdAt: toDate(data.createdAt)
-    };
+    return parseSession(raw);
   },
 
   async getSessions(baseUrl: string): Promise<SessionInfo[]> {
     const raw = await requestJson(baseUrl, "/api/sessions/");
-    return asArray(raw).map((item) => {
-      const data = asRecord(item);
-      return {
-        sessionId: String(data.sessionId ?? ""),
-        createdAt: toDate(data.createdAt)
-      };
-    });
+    return asArray(raw).map(parseSession);
   },
 
   async closeSession(baseUrl: string, sessionId: string): Promise<void> {
@@ -280,23 +291,29 @@ export const ACIApi = {
   async interact(
     baseUrl: string,
     sessionId: string,
+    agentId: string,
     message: string
   ): Promise<InteractionResponse> {
-    const raw = await requestJson(baseUrl, `/api/sessions/${sessionId}/interact/`, {
-      method: "POST",
-      body: JSON.stringify({ message })
-    });
+    const raw = await requestJson(
+      baseUrl,
+      `/api/sessions/${sessionId}/agents/${agentId}/interact/`,
+      {
+        method: "POST",
+        body: JSON.stringify({ message })
+      }
+    );
     return parseInteractionResponse(raw);
   },
 
   async simulateAssistantOutput(
     baseUrl: string,
     sessionId: string,
+    agentId: string,
     assistantOutput: string
   ): Promise<InteractionResponse> {
     const raw = await requestJson(
       baseUrl,
-      `/api/sessions/${sessionId}/interact/simulate`,
+      `/api/sessions/${sessionId}/agents/${agentId}/interact/simulate`,
       {
         method: "POST",
         body: JSON.stringify({ assistantOutput })
@@ -305,13 +322,13 @@ export const ACIApi = {
     return parseInteractionResponse(raw);
   },
 
-  async getWindows(baseUrl: string, sessionId: string): Promise<WindowInfo[]> {
-    const raw = await requestJson(baseUrl, `/api/sessions/${sessionId}/windows/`);
+  async getWindows(baseUrl: string, sessionId: string, agentId: string): Promise<WindowInfo[]> {
+    const raw = await requestJson(baseUrl, `/api/sessions/${sessionId}/agents/${agentId}/windows/`);
     return asArray(raw).map(parseWindow);
   },
 
-  async getApps(baseUrl: string, sessionId: string): Promise<AppInfo[]> {
-    const raw = await requestJson(baseUrl, `/api/sessions/${sessionId}/apps`);
+  async getApps(baseUrl: string, sessionId: string, agentId: string): Promise<AppInfo[]> {
+    const raw = await requestJson(baseUrl, `/api/sessions/${sessionId}/agents/${agentId}/apps`);
     return asArray(raw).map((item) => {
       const data = asRecord(item);
       return {
@@ -326,12 +343,13 @@ export const ACIApi = {
   async getRawContext(
     baseUrl: string,
     sessionId: string,
+    agentId: string,
     includeObsolete: boolean
   ): Promise<string> {
     const encoded = includeObsolete ? "true" : "false";
     const raw = await requestRaw(
       baseUrl,
-      `/api/sessions/${sessionId}/context/raw?includeObsolete=${encoded}`
+      `/api/sessions/${sessionId}/agents/${agentId}/context/raw?includeObsolete=${encoded}`
     );
     if (!raw.ok) {
       throw new Error(`Failed to load raw context (${raw.status}): ${raw.text}`);
@@ -339,8 +357,8 @@ export const ACIApi = {
     return raw.text ?? "";
   },
 
-  async getRawLlmInput(baseUrl: string, sessionId: string): Promise<string> {
-    const raw = await requestRaw(baseUrl, `/api/sessions/${sessionId}/llm-input/raw`);
+  async getRawLlmInput(baseUrl: string, sessionId: string, agentId: string): Promise<string> {
+    const raw = await requestRaw(baseUrl, `/api/sessions/${sessionId}/agents/${agentId}/llm-input/raw`);
     if (!raw.ok) {
       throw new Error(`Failed to load raw llm input (${raw.status}): ${raw.text}`);
     }
@@ -350,12 +368,13 @@ export const ACIApi = {
   async getContextTimeline(
     baseUrl: string,
     sessionId: string,
+    agentId: string,
     includeObsolete: boolean
   ): Promise<ContextTimelineItem[]> {
     const encoded = includeObsolete ? "true" : "false";
     const raw = await requestJson(
       baseUrl,
-      `/api/sessions/${sessionId}/context?includeObsolete=${encoded}`
+      `/api/sessions/${sessionId}/agents/${agentId}/context?includeObsolete=${encoded}`
     );
 
     return asArray(raw).map((item) => {
@@ -374,13 +393,14 @@ export const ACIApi = {
   async runWindowAction(
     baseUrl: string,
     sessionId: string,
+    agentId: string,
     windowId: string,
     actionId: string,
     params: unknown
   ): Promise<ActionInvokeResponse> {
     const raw = await requestJson(
       baseUrl,
-      `/api/sessions/${sessionId}/windows/${windowId}/actions/${actionId}`,
+      `/api/sessions/${sessionId}/agents/${agentId}/windows/${windowId}/actions/${actionId}`,
       {
         method: "POST",
         body: JSON.stringify({ params })

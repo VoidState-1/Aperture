@@ -2,9 +2,17 @@ export type ComposerMode = "llm" | "simulatedAssistant";
 export type SimulatorMode = "create" | "action";
 export type TranscriptRole = "user" | "assistant" | "system" | "simulator";
 
+export interface AgentInfo {
+  agentId: string;
+  name: string | null;
+  role: string | null;
+}
+
 export interface SessionInfo {
   sessionId: string;
   createdAt: Date | null;
+  agentCount: number;
+  agents: AgentInfo[];
 }
 
 export interface AppInfo {
