@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { ACIApi } from "./api";
+import { SessionSidebar } from "./components/SessionSidebar";
+import { ConversationPanel } from "./components/ConversationPanel";
+import { DebugConsole, type DebugInspectorTab } from "./components/DebugConsole";
 import type {
   AppInfo,
   ComposerMode,
@@ -17,8 +20,6 @@ const DEFAULT_MANUAL_OUTPUT = `<action_call>
 
 const EMPTY_APPS: AppInfo[] = [];
 const EMPTY_WINDOWS: WindowInfo[] = [];
-
-type InspectorTab = "context" | "llm" | "windows";
 
 function nowEntry(role: TranscriptEntry["role"], content: string): TranscriptEntry {
   return { role, content, time: new Date() };
@@ -44,7 +45,7 @@ function formatSessionTitle(session: SessionInfo | null): string {
   }
 
   const d = session.createdAt;
-  return `Session #${sessionShortId(session.sessionId)} · ${String(d.getHours()).padStart(2, "0")}:${String(
+  return `Session #${sessionShortId(session.sessionId)} 路 ${String(d.getHours()).padStart(2, "0")}:${String(
     d.getMinutes()
   ).padStart(2, "0")}`;
 }
@@ -83,7 +84,7 @@ export function App(): JSX.Element {
   const [manualActionParams, setManualActionParams] = useState("{}");
 
   const [includeObsolete, setIncludeObsolete] = useState(true);
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("windows");
+  const [inspectorTab, setInspectorTab] = useState<DebugInspectorTab>("windows");
   const [busy, setBusy] = useState(false);
   const [interacting, setInteracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -562,314 +563,77 @@ export function App(): JSX.Element {
 
   return (
     <div className="aci-app">
-      <aside className="aci-sidebar">
-        <div className="aci-brand">
-          <div className="aci-brand-dot" />
-          <div>
-            <div className="aci-brand-title">Aperture</div>
-            <div className="aci-brand-sub">ACI Workbench</div>
-          </div>
-        </div>
+      <SessionSidebar
+        sessions={sessions}
+        selectedSessionId={selectedSessionId}
+        selectedAgentId={selectedAgentId}
+        busy={busy}
+        interacting={interacting}
+        onCreateSession={() => void createSession()}
+        onRefresh={() => void refreshCurrent()}
+        onDeleteSession={() => void deleteCurrentSession()}
+        onSelectSessionAgent={(sessionId, agentId) => void selectSessionAgent(sessionId, agentId)}
+        formatSessionTitle={formatSessionTitle}
+      />
 
-        <button className="aci-button aci-button-primary aci-full" disabled={busy || interacting} onClick={() => void createSession()}>
-          + New Session
-        </button>
+      <ConversationPanel
+        activeSession={activeSession}
+        selectedAgentId={selectedAgentId}
+        baseUrl={baseUrl}
+        error={error}
+        entries={entries}
+        transcriptRef={transcriptRef}
+        busy={busy}
+        interacting={interacting}
+        composerMode={composerMode}
+        composerInput={composerInput}
+        manualOutputInput={manualOutputInput}
+        onSetComposerMode={setComposerMode}
+        onComposerInputChange={setComposerInput}
+        onManualOutputInputChange={setManualOutputInput}
+        onSend={() => void sendComposer()}
+        onRefresh={() => void refreshCurrent()}
+        formatEntryTime={formatTime}
+        sessionShortId={sessionShortId}
+      />
 
-        <div className="aci-sidebar-label">Sessions</div>
-        <div className="aci-session-list">
-          {sessions.length === 0 && <div className="aci-empty">No session found.</div>}
-          {sessions.map((session) => (
-            <div key={session.sessionId} className={`aci-session-card ${session.sessionId === selectedSessionId ? "is-active" : ""}`}>
-              <button
-                className="aci-session-head"
-                disabled={busy || interacting || session.agents.length === 0}
-                onClick={() => {
-                  const fallbackAgentId = session.agents[0]?.agentId ?? null;
-                  if (fallbackAgentId) {
-                    void selectSessionAgent(session.sessionId, fallbackAgentId);
-                  }
-                }}
-              >
-                <span>{formatSessionTitle(session)}</span>
-                <span>{session.agentCount} agents</span>
-              </button>
-              <div className="aci-agent-list">
-                {session.agents.map((agent) => (
-                  <button
-                    key={agent.agentId}
-                    className={`aci-agent-item ${
-                      session.sessionId === selectedSessionId && agent.agentId === selectedAgentId ? "is-active" : ""
-                    }`}
-                    disabled={busy || interacting}
-                    onClick={() => void selectSessionAgent(session.sessionId, agent.agentId)}
-                  >
-                    <span>{agent.name ?? agent.agentId}</span>
-                    <small>{agent.role ?? "agent"}</small>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="aci-sidebar-foot">
-          <button className="aci-button aci-button-ghost aci-full" disabled={busy || interacting} onClick={() => void refreshCurrent()}>
-            Refresh
-          </button>
-          <button
-            className="aci-button aci-button-danger aci-full"
-            disabled={busy || interacting || !selectedSessionId}
-            onClick={() => void deleteCurrentSession()}
-          >
-            Close Session
-          </button>
-        </div>
-      </aside>
-
-      <section className="aci-center">
-        <header className="aci-center-header">
-          <div className="aci-breadcrumb">
-            <span>{activeSession ? `Session #${sessionShortId(activeSession.sessionId)}` : "No Session"}</span>
-            <span>/</span>
-            <span>{selectedAgentId ?? "No Agent"}</span>
-          </div>
-          <div className="aci-compact-actions">
-            <button className="aci-icon-button" disabled={busy || interacting} onClick={() => void refreshCurrent()}>
-              ↻
-            </button>
-          </div>
-        </header>
-
-        <div className="aci-system-banner">
-          System initialized. Active endpoint: <strong>{baseUrl}</strong>
-        </div>
-
-        {error && <div className="aci-error-banner">Request failed: {error}</div>}
-
-        <div className="aci-transcript" ref={transcriptRef}>
-          {entries.length === 0 && <div className="aci-empty">Start by sending a message.</div>}
-          {entries.map((entry, index) => (
-            <article key={`${entry.time.toISOString()}-${index}`} className={`aci-entry role-${entry.role}`}>
-              <header>
-                <span>{entry.role.toUpperCase()}</span>
-                <span>{formatTime(entry.time)}</span>
-              </header>
-              <pre>{entry.content}</pre>
-            </article>
-          ))}
-        </div>
-
-        <footer className="aci-composer">
-          <div className="aci-chip-row">
-            <button
-              className={`aci-chip ${composerMode === "llm" ? "is-active" : ""}`}
-              disabled={busy || interacting}
-              onClick={() => setComposerMode("llm")}
-            >
-              LLM
-            </button>
-            <button
-              className={`aci-chip ${composerMode === "simulatedAssistant" ? "is-active" : ""}`}
-              disabled={busy || interacting}
-              onClick={() => setComposerMode("simulatedAssistant")}
-            >
-              Simulated
-            </button>
-          </div>
-
-          {composerMode === "llm" ? (
-            <textarea
-              className="aci-input aci-textarea"
-              disabled={busy || interacting}
-              value={composerInput}
-              onChange={(event) => setComposerInput(event.target.value)}
-              placeholder="Type a message..."
-            />
-          ) : (
-            <textarea
-              className="aci-input aci-textarea aci-mono"
-              disabled={busy || interacting}
-              value={manualOutputInput}
-              onChange={(event) => setManualOutputInput(event.target.value)}
-              placeholder="<action_call>...</action_call>"
-            />
-          )}
-
-          <button
-            className="aci-button aci-button-primary"
-            disabled={busy || interacting || (composerMode === "llm" ? !composerInput.trim() : !manualOutputInput.trim())}
-            onClick={() => void sendComposer()}
-          >
-            {interacting ? "Running Loop..." : "Send"}
-          </button>
-        </footer>
-      </section>
-
-      <aside className="aci-debug">
-        <header className="aci-debug-header">Debug Console</header>
-
-        <section className="aci-debug-section">
-          <div className="aci-section-title">Connection</div>
-          <label className="aci-field-label">Server URL</label>
-          <input
-            className="aci-input"
-            disabled={busy || interacting}
-            value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
-            placeholder={DEFAULT_BASE_URL}
-          />
-          <label className="aci-checkbox">
-            <input
-              type="checkbox"
-              checked={includeObsolete}
-              disabled={busy || interacting}
-              onChange={(event) => {
-                const checked = event.target.checked;
-                setIncludeObsolete(checked);
-                if (selectedSessionId && selectedAgentId) {
-                  void runGuarded(async () => {
-                    await loadSessionAgentState(selectedSessionId, selectedAgentId, checked);
-                  });
-                }
-              }}
-            />
-            Include obsolete context
-          </label>
-        </section>
-
-        <section className="aci-debug-section">
-          <div className="aci-section-title">Simulator</div>
-          <div className="aci-chip-row">
-            <button
-              className={`aci-chip ${simulatorMode === "create" ? "is-active" : ""}`}
-              disabled={busy || interacting}
-              onClick={() => setSimulatorMode("create")}
-            >
-              Open App
-            </button>
-            <button
-              className={`aci-chip ${simulatorMode === "action" ? "is-active" : ""}`}
-              disabled={busy || interacting}
-              onClick={() => setSimulatorMode("action")}
-            >
-              Action
-            </button>
-          </div>
-
-          {simulatorMode === "create" ? (
-            <>
-              <label className="aci-field-label">Application</label>
-              <select
-                className="aci-input"
-                disabled={busy || interacting}
-                value={selectedCreateApp ?? ""}
-                onChange={(event) => setSelectedCreateApp(event.target.value)}
-              >
-                {apps.length === 0 && <option value="">No app</option>}
-                {apps.map((app) => (
-                  <option key={app.name} value={app.name}>
-                    {app.name} {app.isStarted ? "(started)" : ""}
-                  </option>
-                ))}
-              </select>
-
-              <label className="aci-field-label">Target (optional)</label>
-              <input
-                className="aci-input"
-                disabled={busy || interacting}
-                value={createTarget}
-                onChange={(event) => setCreateTarget(event.target.value)}
-                placeholder="e.g. docs"
-              />
-
-              <button className="aci-button aci-button-primary" disabled={busy || interacting || !selectedCreateApp} onClick={() => void simulateCreateToolCall()}>
-                Simulate Open
-              </button>
-            </>
-          ) : (
-            <>
-              <label className="aci-field-label">Window</label>
-              <select
-                className="aci-input"
-                disabled={busy || interacting}
-                value={selectedActionWindowId ?? ""}
-                onChange={(event) => onSelectActionWindow(event.target.value)}
-              >
-                {windows.length === 0 && <option value="">No window</option>}
-                {windows.map((window) => (
-                  <option key={window.id} value={window.id}>
-                    {window.id}
-                  </option>
-                ))}
-              </select>
-
-              <label className="aci-field-label">Action</label>
-              <input
-                className="aci-input"
-                disabled={busy || interacting || !selectedWindow}
-                value={manualActionId}
-                onChange={(event) => setManualActionId(event.target.value)}
-                placeholder="e.g. system.close"
-              />
-
-              {selectedWindow && (
-                <div className="aci-hint">
-                  Visible namespaces: {selectedWindow.namespaces.length > 0 ? selectedWindow.namespaces.join(", ") : "none"}
-                </div>
-              )}
-
-              <label className="aci-field-label">Params JSON</label>
-              <textarea
-                className="aci-input aci-textarea aci-mono"
-                disabled={busy || interacting}
-                value={manualActionParams}
-                onChange={(event) => setManualActionParams(event.target.value)}
-                placeholder='e.g. {"summary":"done"}'
-              />
-
-              <div className="aci-inline-buttons">
-                <button className="aci-button aci-button-primary" disabled={busy || interacting || !selectedWindow || !manualActionId.trim()} onClick={() => void simulateActionToolCall()}>
-                  Simulate
-                </button>
-                <button className="aci-button aci-button-ghost" disabled={busy || interacting || !selectedWindow || !manualActionId.trim()} onClick={() => void invokeActionDirectly()}>
-                  Direct
-                </button>
-              </div>
-            </>
-          )}
-        </section>
-
-        <section className="aci-debug-section aci-grow">
-          <div className="aci-section-title">Inspector</div>
-          <div className="aci-chip-row">
-            <button className={`aci-chip ${inspectorTab === "context" ? "is-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("context")}>
-              Context
-            </button>
-            <button className={`aci-chip ${inspectorTab === "llm" ? "is-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("llm")}>
-              LLM
-            </button>
-            <button className={`aci-chip ${inspectorTab === "windows" ? "is-active" : ""}`} disabled={busy} onClick={() => setInspectorTab("windows")}>
-              Windows
-            </button>
-          </div>
-
-          {inspectorTab === "context" && <pre className="aci-block">{rawContext || "Empty context."}</pre>}
-          {inspectorTab === "llm" && <pre className="aci-block">{rawLlmInput || "Empty llm input."}</pre>}
-          {inspectorTab === "windows" && (
-            <div className="aci-window-list">
-              {windows.length === 0 && <div className="aci-empty">No windows.</div>}
-              {windows.map((window) => (
-                <details key={window.id}>
-                  <summary>
-                    {window.id} <small>{window.appName ?? "unknown"}</small>
-                  </summary>
-                  <pre className="aci-block">{window.content}</pre>
-                </details>
-              ))}
-            </div>
-          )}
-        </section>
-      </aside>
+      <DebugConsole
+        busy={busy}
+        interacting={interacting}
+        baseUrl={baseUrl}
+        includeObsolete={includeObsolete}
+        onBaseUrlChange={setBaseUrl}
+        onIncludeObsoleteChange={(checked) => {
+          setIncludeObsolete(checked);
+          if (selectedSessionId && selectedAgentId) {
+            void runGuarded(async () => {
+              await loadSessionAgentState(selectedSessionId, selectedAgentId, checked);
+            });
+          }
+        }}
+        simulatorMode={simulatorMode}
+        onSimulatorModeChange={setSimulatorMode}
+        apps={apps}
+        selectedCreateApp={selectedCreateApp}
+        createTarget={createTarget}
+        onSelectedCreateAppChange={setSelectedCreateApp}
+        onCreateTargetChange={setCreateTarget}
+        onSimulateCreate={() => void simulateCreateToolCall()}
+        windows={windows}
+        selectedWindow={selectedWindow}
+        selectedActionWindowId={selectedActionWindowId}
+        manualActionId={manualActionId}
+        manualActionParams={manualActionParams}
+        onSelectActionWindow={onSelectActionWindow}
+        onManualActionIdChange={setManualActionId}
+        onManualActionParamsChange={setManualActionParams}
+        onSimulateAction={() => void simulateActionToolCall()}
+        onDirectInvoke={() => void invokeActionDirectly()}
+        inspectorTab={inspectorTab}
+        onInspectorTabChange={setInspectorTab}
+        rawContext={rawContext}
+        rawLlmInput={rawLlmInput}
+      />
     </div>
   );
 }
