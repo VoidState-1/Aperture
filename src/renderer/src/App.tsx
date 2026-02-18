@@ -1,21 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ACIApi } from "./api";
 import type {
-  ActionParamSchema,
   AppInfo,
   ComposerMode,
   InteractionResponse,
   SessionInfo,
   SimulatorMode,
   TranscriptEntry,
-  WindowAction,
   WindowInfo
 } from "./types";
 
 const DEFAULT_BASE_URL = "http://localhost:5228";
-const DEFAULT_MANUAL_OUTPUT = `<tool_call>
-{"calls":[{"window_id":"launcher","action_id":"open","params":{"app":"file_explorer"}}]}
-</tool_call>`;
+const DEFAULT_MANUAL_OUTPUT = `<action_call>
+{"calls":[{"window_id":"launcher","action_id":"launcher.open","params":{"app":"file_explorer"}}]}
+</action_call>`;
 
 const EMPTY_APPS: AppInfo[] = [];
 const EMPTY_WINDOWS: WindowInfo[] = [];
@@ -56,72 +54,6 @@ function errorText(err: unknown): string {
   return String(err ?? "unknown error");
 }
 
-function formatJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
-}
-
-function buildDefaultPayloadFromSchema(schema: ActionParamSchema | null): unknown {
-  if (!schema) {
-    return {};
-  }
-
-  if (schema.defaultValue !== undefined) {
-    return schema.defaultValue;
-  }
-
-  switch (schema.kind) {
-    case "string":
-      return "";
-    case "integer":
-      return 0;
-    case "number":
-      return 0;
-    case "boolean":
-      return false;
-    case "null":
-      return null;
-    case "array":
-      return [];
-    case "object": {
-      const obj: Record<string, unknown> = {};
-      for (const [name, child] of Object.entries(schema.properties)) {
-        if (child.required || child.defaultValue !== undefined) {
-          obj[name] = buildDefaultPayloadFromSchema(child);
-        }
-      }
-      return obj;
-    }
-    default:
-      return {};
-  }
-}
-
-function schemaSignature(schema: ActionParamSchema | null): string {
-  if (!schema) {
-    return "none";
-  }
-
-  switch (schema.kind) {
-    case "string":
-    case "integer":
-    case "number":
-    case "boolean":
-    case "null":
-      return schema.kind;
-    case "array":
-      return `array<${schemaSignature(schema.items)}>`;
-    case "object": {
-      const fields = Object.entries(schema.properties).map(([name, child]) => {
-        const optional = child.required ? "" : "?";
-        return `${name}:${schemaSignature(child)}${optional}`;
-      });
-      return fields.length === 0 ? "object" : `{ ${fields.join(", ")} }`;
-    }
-    default:
-      return "unknown";
-  }
-}
-
 function isAssistantTimelineType(type: string): boolean {
   const normalized = type.trim().toLowerCase().replace(/[\s_-]/g, "");
   return normalized.startsWith("assistant");
@@ -147,14 +79,14 @@ export function App(): JSX.Element {
   const [selectedCreateApp, setSelectedCreateApp] = useState<string | null>(null);
   const [createTarget, setCreateTarget] = useState("");
   const [selectedActionWindowId, setSelectedActionWindowId] = useState<string | null>(null);
-  const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
+  const [manualActionId, setManualActionId] = useState("");
+  const [manualActionParams, setManualActionParams] = useState("{}");
 
   const [includeObsolete, setIncludeObsolete] = useState(true);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("windows");
   const [busy, setBusy] = useState(false);
   const [interacting, setInteracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [actionParamPayload, setActionParamPayload] = useState<Record<string, string>>({});
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pollTimerRef = useRef<number | null>(null);
@@ -168,11 +100,6 @@ export function App(): JSX.Element {
   const selectedWindow = useMemo(
     () => windows.find((window) => window.id === selectedActionWindowId) ?? null,
     [selectedActionWindowId, windows]
-  );
-
-  const selectedAction = useMemo(
-    () => selectedWindow?.actions.find((action) => action.id === selectedActionId) ?? null,
-    [selectedActionId, selectedWindow]
   );
 
   useEffect(() => {
@@ -219,18 +146,12 @@ export function App(): JSX.Element {
     return session.agents[0]?.agentId ?? null;
   }
 
-  function actionParamKey(windowId: string, actionId: string): string {
-    return `${windowId}::${actionId}`;
-  }
-
-  function prepareParamEditor(window: WindowInfo, action: WindowAction): void {
-    const key = actionParamKey(window.id, action.id);
-    if (key in actionParamPayload) {
-      return;
+  function suggestActionId(window: WindowInfo | null): string {
+    if (!window || window.namespaces.length === 0) {
+      return "";
     }
 
-    const defaultPayload = buildDefaultPayloadFromSchema(action.paramSchema);
-    setActionParamPayload((prev) => ({ ...prev, [key]: formatJson(defaultPayload) }));
+    return `${window.namespaces[0]}.`;
   }
 
   function syncSimulatorSelections(nextApps: AppInfo[], nextWindows: WindowInfo[]): void {
@@ -244,33 +165,18 @@ export function App(): JSX.Element {
       windowId = nextWindows[0]?.id ?? null;
     }
 
-    const window = nextWindows.find((item) => item.id === windowId) ?? null;
-    const actions = window?.actions ?? [];
-    let actionId = selectedActionId;
-    if (!actionId || !actions.some((item) => item.id === actionId)) {
-      actionId = actions[0]?.id ?? null;
-    }
-
     setSelectedCreateApp(createApp);
     setSelectedActionWindowId(windowId);
-    setSelectedActionId(actionId);
 
-    if (window && actionId) {
-      const action = actions.find((item) => item.id === actionId) ?? null;
-      if (action) {
-        prepareParamEditor(window, action);
-      }
+    if (!manualActionId.trim()) {
+      const window = nextWindows.find((item) => item.id === windowId) ?? null;
+      setManualActionId(suggestActionId(window));
     }
   }
 
-  function collectActionParams(window: WindowInfo, action: WindowAction): unknown {
-    const key = actionParamKey(window.id, action.id);
-    const raw = (actionParamPayload[key] ?? "").trim();
-
+  function collectActionParams(): unknown {
+    const raw = manualActionParams.trim();
     if (raw.length === 0) {
-      if (action.paramSchema?.required) {
-        throw new Error("Action params are required. Please enter valid JSON.");
-      }
       return null;
     }
 
@@ -555,7 +461,7 @@ export function App(): JSX.Element {
     }
 
     const { sessionId, agentId } = context;
-    const assistantOutput = `<tool_call>\n${JSON.stringify({ calls }, null, 2)}\n</tool_call>`;
+    const assistantOutput = `<action_call>\n${JSON.stringify({ calls }, null, 2)}\n</action_call>`;
     setEntries((prev) => [...prev, nowEntry("simulator", assistantOutput)]);
     const result = await ACIApi.simulateAssistantOutput(baseUrl, sessionId, agentId, assistantOutput);
     applyInteractionResult(result);
@@ -577,7 +483,7 @@ export function App(): JSX.Element {
       await simulateToolCall([
         {
           window_id: "launcher",
-          action_id: "open",
+          action_id: "launcher.open",
           params
         }
       ]);
@@ -586,15 +492,20 @@ export function App(): JSX.Element {
 
   async function simulateActionToolCall(): Promise<void> {
     await runGuarded(async () => {
-      if (!selectedWindow || !selectedAction) {
-        throw new Error("Select a window and action first.");
+      if (!selectedWindow) {
+        throw new Error("Select a window first.");
       }
 
-      const params = collectActionParams(selectedWindow, selectedAction);
+      const actionId = manualActionId.trim();
+      if (!actionId) {
+        throw new Error("Enter action id (namespace.action).");
+      }
+
+      const params = collectActionParams();
       await simulateToolCall([
         {
           window_id: selectedWindow.id,
-          action_id: selectedAction.id,
+          action_id: actionId,
           params
         }
       ]);
@@ -608,19 +519,24 @@ export function App(): JSX.Element {
         throw new Error("No active agent.");
       }
 
-      if (!selectedWindow || !selectedAction) {
-        throw new Error("Select a window and action first.");
+      if (!selectedWindow) {
+        throw new Error("Select a window first.");
+      }
+
+      const actionId = manualActionId.trim();
+      if (!actionId) {
+        throw new Error("Enter action id (namespace.action).");
       }
 
       const { sessionId, agentId } = context;
-      const params = collectActionParams(selectedWindow, selectedAction);
-      const result = await ACIApi.runWindowAction(baseUrl, sessionId, agentId, selectedWindow.id, selectedAction.id, params);
+      const params = collectActionParams();
+      const result = await ACIApi.runWindowAction(baseUrl, sessionId, agentId, selectedWindow.id, actionId, params);
 
       setEntries((prev) => [
         ...prev,
         nowEntry(
           "system",
-          `Direct invoke ${selectedWindow.id}.${selectedAction.id}: success=${result.success}, message=${result.message ?? ""}, summary=${result.summary ?? ""}`
+          `Direct invoke ${selectedWindow.id}.${actionId}: success=${result.success}, message=${result.message ?? ""}, summary=${result.summary ?? ""}`
         )
       ]);
 
@@ -630,48 +546,10 @@ export function App(): JSX.Element {
 
   function onSelectActionWindow(windowId: string): void {
     setSelectedActionWindowId(windowId);
-    const window = windows.find((item) => item.id === windowId) ?? null;
-    const nextAction = window?.actions[0]?.id ?? null;
-    setSelectedActionId(nextAction);
-
-    if (window && nextAction) {
-      const action = window.actions.find((item) => item.id === nextAction);
-      if (action) {
-        prepareParamEditor(window, action);
-      }
+    if (!manualActionId.trim()) {
+      const window = windows.find((item) => item.id === windowId) ?? null;
+      setManualActionId(suggestActionId(window));
     }
-  }
-
-  function onSelectAction(actionId: string): void {
-    setSelectedActionId(actionId);
-    const window = windows.find((item) => item.id === selectedActionWindowId) ?? null;
-    if (!window) return;
-    const action = window.actions.find((item) => item.id === actionId);
-    if (action) {
-      prepareParamEditor(window, action);
-    }
-  }
-
-  function renderActionPayloadEditor(): JSX.Element {
-    if (!selectedWindow || !selectedAction) {
-      return <></>;
-    }
-
-    const key = actionParamKey(selectedWindow.id, selectedAction.id);
-    const value = actionParamPayload[key] ?? formatJson(buildDefaultPayloadFromSchema(selectedAction.paramSchema));
-
-    return (
-      <textarea
-        className="aci-input aci-textarea aci-mono"
-        disabled={busy || interacting}
-        value={value}
-        onChange={(event) => {
-          const next = event.target.value;
-          setActionParamPayload((prev) => ({ ...prev, [key]: next }));
-        }}
-        placeholder='e.g. {"path":"docs","recursive":true}'
-      />
-    );
   }
 
   async function selectSessionAgent(sessionId: string, agentId: string): Promise<void> {
@@ -813,7 +691,7 @@ export function App(): JSX.Element {
               disabled={busy || interacting}
               value={manualOutputInput}
               onChange={(event) => setManualOutputInput(event.target.value)}
-              placeholder="<tool_call>...</tool_call>"
+              placeholder="<action_call>...</action_call>"
             />
           )}
 
@@ -926,35 +804,37 @@ export function App(): JSX.Element {
               </select>
 
               <label className="aci-field-label">Action</label>
-              <select
+              <input
                 className="aci-input"
                 disabled={busy || interacting || !selectedWindow}
-                value={selectedActionId ?? ""}
-                onChange={(event) => onSelectAction(event.target.value)}
-              >
-                {!selectedWindow && <option value="">Select window</option>}
-                {selectedWindow?.actions.map((action) => (
-                  <option key={action.id} value={action.id}>
-                    {action.label} ({action.id})
-                  </option>
-                ))}
-              </select>
+                value={manualActionId}
+                onChange={(event) => setManualActionId(event.target.value)}
+                placeholder="e.g. system.close"
+              />
 
-              {selectedAction && (
-                <>
-                  <label className="aci-field-label">Params JSON</label>
-                  {renderActionPayloadEditor()}
-                  <div className="aci-hint">Schema: {schemaSignature(selectedAction.paramSchema)}</div>
-                  <div className="aci-inline-buttons">
-                    <button className="aci-button aci-button-primary" disabled={busy || interacting} onClick={() => void simulateActionToolCall()}>
-                      Simulate
-                    </button>
-                    <button className="aci-button aci-button-ghost" disabled={busy || interacting} onClick={() => void invokeActionDirectly()}>
-                      Direct
-                    </button>
-                  </div>
-                </>
+              {selectedWindow && (
+                <div className="aci-hint">
+                  Visible namespaces: {selectedWindow.namespaces.length > 0 ? selectedWindow.namespaces.join(", ") : "none"}
+                </div>
               )}
+
+              <label className="aci-field-label">Params JSON</label>
+              <textarea
+                className="aci-input aci-textarea aci-mono"
+                disabled={busy || interacting}
+                value={manualActionParams}
+                onChange={(event) => setManualActionParams(event.target.value)}
+                placeholder='e.g. {"summary":"done"}'
+              />
+
+              <div className="aci-inline-buttons">
+                <button className="aci-button aci-button-primary" disabled={busy || interacting || !selectedWindow || !manualActionId.trim()} onClick={() => void simulateActionToolCall()}>
+                  Simulate
+                </button>
+                <button className="aci-button aci-button-ghost" disabled={busy || interacting || !selectedWindow || !manualActionId.trim()} onClick={() => void invokeActionDirectly()}>
+                  Direct
+                </button>
+              </div>
             </>
           )}
         </section>
