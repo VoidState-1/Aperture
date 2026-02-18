@@ -96,6 +96,7 @@ export interface WindowInfo {
   appName: string | null;
   createdAt: number;
   updatedAt: number;
+  namespaces: string[];
   actions: WindowAction[];
 }
 
