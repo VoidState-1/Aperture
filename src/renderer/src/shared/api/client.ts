@@ -1,6 +1,37 @@
 ﻿import type { ActionInvokeResponse, AppInfo, ContextTimelineItem, InteractionResponse, SessionInfo, WindowInfo } from "../../types";
 import { requestJson, requestRaw } from "./http";
 import { parseActionInvokeResponse, parseApps, parseContextTimeline, parseInteractionResponse, parseSession, parseSessions, parseWindows } from "./parsers";
+import { asArray, asRecord } from "./runtime";
+
+/**
+ * 将 `/context` 的结构化时间线还原成便于阅读的文本上下文。
+ */
+function buildRawContextFromTimeline(raw: unknown): string {
+  const lines: string[] = [];
+  const timeline = asArray(raw);
+
+  for (const item of timeline) {
+    const entry = asRecord(item);
+    const type = String(entry.type ?? "");
+    const rawContent = String(entry.rawContent ?? "");
+
+    if (type === "Window") {
+      const windowRecord = asRecord(entry.window);
+      const rendered = windowRecord.rendered;
+      if (typeof rendered === "string" && rendered.length > 0) {
+        lines.push(rendered);
+      } else {
+        lines.push(rawContent);
+      }
+    } else {
+      lines.push(rawContent);
+    }
+
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd();
+}
 
 /**
  * ACI 前端 API 客户端。
@@ -61,13 +92,8 @@ export const ACIApi = {
 
   async getRawContext(baseUrl: string, sessionId: string, agentId: string, includeObsolete: boolean): Promise<string> {
     const encoded = includeObsolete ? "true" : "false";
-    const raw = await requestRaw(baseUrl, `/api/sessions/${sessionId}/agents/${agentId}/context/raw?includeObsolete=${encoded}`);
-
-    if (!raw.ok) {
-      throw new Error(`Failed to load raw context (${raw.status}): ${raw.text}`);
-    }
-
-    return raw.text ?? "";
+    const raw = await requestJson(baseUrl, `/api/sessions/${sessionId}/agents/${agentId}/context?includeObsolete=${encoded}`);
+    return buildRawContextFromTimeline(raw);
   },
 
   async getRawLlmInput(baseUrl: string, sessionId: string, agentId: string): Promise<string> {

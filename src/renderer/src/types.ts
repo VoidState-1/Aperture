@@ -1,5 +1,5 @@
-export type ComposerMode = "llm" | "simulatedAssistant";
-export type SimulatorMode = "create" | "action";
+export type ComposerMode = "llm" | "simulatedAssistant" | "toolCall";
+export type CenterViewMode = "rendered" | "llmRaw";
 export type TranscriptRole = "user" | "assistant" | "system" | "simulator";
 
 export interface AgentInfo {
@@ -73,6 +73,14 @@ export type ActionParamKind =
   | "object"
   | "array"
   | "unknown";
+
+export interface ToolFormField {
+  path: string;
+  label: string;
+  kind: ActionParamKind;
+  required: boolean;
+  description: string | null;
+}
 
 export interface ActionParamSchema {
   kind: ActionParamKind;

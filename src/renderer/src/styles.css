@@ -204,6 +204,12 @@ textarea {
   justify-content: space-between;
 }
 
+.aci-compact-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .aci-breadcrumb {
   display: flex;
   align-items: center;
@@ -255,6 +261,13 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.aci-raw-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 14px 20px 12px;
 }
 
 .aci-entry {
@@ -436,6 +449,12 @@ textarea {
   color: var(--text-muted);
 }
 
+.aci-button-ghost.is-active {
+  border-color: #e7b8a7;
+  color: #9d4e37;
+  background: #fff2ec;
+}
+
 .aci-button-danger {
   background: #fff;
   border-color: #f0cbc6;
@@ -496,6 +515,10 @@ textarea {
   font-weight: 500;
 }
 
+.aci-window-tools {
+  padding: 0 10px 8px;
+}
+
 .aci-block {
   margin: 0;
   min-height: 0;
@@ -510,6 +533,209 @@ textarea {
   border-radius: 9px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.aci-block-fill {
+  width: 100%;
+  height: 100%;
+}
+
+.aci-window-list details .aci-block {
+  max-height: 240px;
+  min-height: 0;
+  flex: none;
+  margin: 0 10px 10px;
+}
+
+.aci-tool-simulator {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aci-tool-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.aci-param-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aci-param-item {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 12px;
+  align-items: flex-start;
+  padding: 4px 0;
+}
+
+.aci-param-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aci-param-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.aci-param-required,
+.aci-param-optional,
+.aci-param-kind {
+  display: inline-flex;
+  padding: 0;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.aci-param-required {
+  color: #cc5246;
+}
+
+.aci-param-optional {
+  color: var(--text-muted);
+}
+
+.aci-param-kind {
+  color: #7d7261;
+}
+
+.aci-param-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.aci-param-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.aci-param-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aci-param-row {
+  display: grid;
+  grid-template-columns: 1.1fr 120px 1.2fr auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.aci-param-null {
+  border: 1px dashed var(--border-strong);
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: var(--text-subtle);
+  font-size: 12px;
+  background: var(--bg-soft);
+}
+
+/* DebugConsole 增强样式 */
+.aci-window-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 8px;
+  width: 100%;
+}
+
+.aci-window-id {
+  font-weight: 700;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aci-window-tag {
+  font-size: 9px;
+  background: var(--bg-soft-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.aci-window-inspector {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.aci-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+
+.aci-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.aci-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.aci-action-chip {
+  background: #fdf5f2;
+  color: var(--accent-strong);
+  border: 1px solid #f2dfd8;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.aci-action-chip:hover:not(:disabled) {
+  background: #fbe5dd;
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.aci-text-button {
+  background: none;
+  border: none;
+  color: #5b87bb;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+.aci-text-button:hover:not(:disabled) {
+  text-decoration: underline;
+  color: #3b6da5;
+}
+
+.aci-block.aci-small {
+  font-size: 11px;
+  padding: 8px;
+  max-height: 180px;
 }
 
 .aci-empty {
@@ -541,5 +767,13 @@ textarea {
 
   .aci-center {
     min-height: 64vh;
+  }
+
+  .aci-tool-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .aci-param-row {
+    grid-template-columns: 1fr;
   }
 }
